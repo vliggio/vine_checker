@@ -1,3 +1,3 @@
 import { initView } from './src/view.js';
 
-initView('popup');
+initView('page');

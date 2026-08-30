@@ -16,7 +16,7 @@ npm test
 
 Then load it: `chrome://extensions` → **Developer mode** → **Load unpacked** → pick the
 repo folder. After changing anything under `src/`, hit the reload arrow on the extension
-card. Changes to `popup.*` and `options.*` just need the page reopened.
+card. Changes to `popup.*`, `results.*` and `options.*` just need the page reopened.
 
 ## Checks
 
@@ -59,7 +59,7 @@ and so a signed-out session fails once instead of 150 times.
 
 Match what is already there:
 
-- ES modules for anything loaded by the service worker, popup or options page;
+- ES modules for anything loaded by the service worker, popup, results page or options page;
   `src/parse.js` stays a classic script because content-script injection requires it
 - No build step, no bundler, no framework, no runtime dependencies — this must stay
   loadable as an unpacked folder

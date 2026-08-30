@@ -63,6 +63,12 @@ Duplicates are dropped, non-Vine URLs are reported and skipped.
 **Sweep.** Click the icon → **Check all now**. Searches with new items sort to the top;
 expand one to see thumbnails and titles.
 
+**Full-page view.** The ↗ button in the popup header opens the same list in a tab. The
+popup closes whenever it loses focus, so the tab is the better place to work through a
+long list: it stays open next to the Vine tabs you are triaging, resizes, and shows more
+thumbnails per row. It picks up sweep progress live, and reuses an already-open results
+tab instead of stacking duplicates.
+
 **New means never acknowledged.** An item counts as new until you acknowledge it — by
 hitting *Open search*, *Mark seen* on a row, or *Mark all seen*. Repeated sweeps will not
 quietly clear a find you haven't looked at yet. Newness is global: an ASIN you have seen
@@ -79,6 +85,8 @@ newly appear.
 | Delay between requests | 1500 ms | Randomised up to 2×. Raise it if Amazon starts rate-limiting. |
 | Pages per search | 2 | Vine returns 36 items per page. Vine search results are relevance-ordered, not date-ordered, so a new item in a large result set can sit past page 2 — raise this if your searches return hundreds of items. |
 | Reuse an open amazon.com tab | on | Off means a background tab is opened for the sweep and closed after. |
+| Sort searches by | Item count | Or by title (A–Z). Applied within each group, so searches with new items still come first either way. |
+| Hide a search once marked seen | off | On, an acknowledged search leaves the list instead of dropping to the bottom; it is counted in the footer. Errors are never hidden. |
 
 A 150-search sweep at the defaults takes roughly 10–15 minutes. It runs in the background;
 you can close the popup.

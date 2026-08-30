@@ -138,7 +138,7 @@ reviews:
         `manifest.json` host permissions and `isVineUrl()` updated — flag one without
         the other. Anything added here is pure and should come with a unit test.
 
-    - path: "{popup,options}.{js,html,css}"
+    - path: "**/{popup,results,view,options}.{js,html,css}"
       instructions: |-
         Plain DOM, no framework. Build nodes with `document.createElement` and set text
         via `textContent`; flag any `innerHTML` assignment built from scraped Amazon
@@ -146,6 +146,10 @@ reviews:
 
         Check both light and dark: colours come from `theme.css` custom properties, so
         flag hard-coded hex values. Keep controls keyboard-reachable and labelled.
+
+        The popup and the results page share one renderer, `src/view.js`. Flag UI added
+        to `popup.html` or `results.html` that the other surface should have too, and any
+        second copy of rendering logic.
 
     - path: "test/**/*.mjs"
       instructions: |-
@@ -241,7 +245,7 @@ reviews:
         mode: warning
         instructions: >-
           CI cannot exercise a real sweep. Fail if the PR changes anything under src/,
-          popup.*, options.* or manifest.json without the description saying what was
+          popup.*, results.*, options.* or manifest.json without the description saying what was
           actually run - for example npm test, npm run manifest, a real sweep after
           loading unpacked, or Options - Self-test. Pass for docs-only, workflow-only
           or test-only changes.

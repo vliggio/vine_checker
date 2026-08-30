@@ -56,7 +56,8 @@ carries the session cookie regardless of SameSite rules; and MV3 service workers
 
 ### Module system split
 
-- ES modules: `src/background.js`, `src/storage.js`, `src/urls.js`, `popup.js`, `options.js`
+- ES modules: `src/background.js`, `src/storage.js`, `src/urls.js`, `src/view.js`, `popup.js`,
+  `results.js`, `options.js`
 - Classic scripts: `src/parse.js`, `src/collector.js`
 
 `parse.js` and `collector.js` must stay classic because `chrome.scripting.executeScript({files})`
@@ -65,6 +66,15 @@ injects classic scripts. `parse.js` dual-exports — `globalThis.VineParse` in t
 
 This is why pure URL helpers live in `src/urls.js` (ESM, importable by the worker) and
 **not** in `parse.js`. Don't reintroduce that duplication.
+
+### The two result surfaces
+
+`popup.html` (toolbar) and `results.html` (a tab) are the same UI. All of it —
+render, header, rows — lives in `src/view.js`; each shell is a three-line entry point
+calling `initView('popup' | 'page')`, plus a stylesheet holding nothing but its own
+sizing on top of the shared `view.css`. `mode` covers the only real differences: the
+popup closes itself when you open a search, and shows fewer thumbnails per row. Adding
+UI to one surface and not the other is how these drift — put it in `view.js`.
 
 ### State
 
