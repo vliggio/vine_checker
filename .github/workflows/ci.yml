@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the floor: npm test uses --disable-warning, added in Node 21.3.
+        node: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step: the project has no dependencies by design.
+      - name: Unit tests
+        run: npm test
+
+      - name: Validate manifest
+        run: npm run manifest

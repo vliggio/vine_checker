@@ -1,0 +1,89 @@
+name: Parser broken (Amazon changed something)
+description: Sweeps report no items, wrong counts, or missing titles and images
+title: "[parser] "
+labels: ["bug", "parser"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the failure this project is most likely to hit: Amazon changes their
+        markup and the selectors stop matching. The self-test output below is the
+        single most useful thing you can provide.
+
+  - type: textarea
+    id: selftest
+    attributes:
+      label: Self-test output
+      description: |
+        Options → Self-test, paste one of your search URLs, hit Run, and paste the
+        whole result here. Redact the URL if you would rather not share the term.
+      render: text
+      placeholder: |
+        status:     ok
+        total:      50 item(s) reported by Amazon
+        pages:      2
+        parsed:     0 tiles on page 1
+        degraded:   no
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: What is wrong
+      options:
+        - Searches that have items report zero
+        - Counts are wrong
+        - Items appear but titles or images are missing (degraded)
+        - Everything is flagged as new on every sweep
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: verified
+    attributes:
+      label: What the same search shows in a normal browser tab
+      description: Open the search URL yourself. How many items does Amazon say there are?
+      placeholder: 'Amazon shows "50 item(s) matching keyboard"'
+    validations:
+      required: true
+
+  - type: textarea
+    id: markup
+    attributes:
+      label: Tile markup, if you dug in
+      description: |
+        Optional but decisive. In a tab on a Vine search page, run this in the console
+        and paste the result — it reads the raw HTML rather than the rendered DOM, so
+        other extensions cannot pollute it:
+
+        ```js
+        const html = await (await fetch(location.href, {credentials:'same-origin'})).text();
+        const d = new DOMParser().parseFromString(html, 'text/html');
+        const t = d.querySelector('.vvp-item-tile');
+        console.log({
+          tiles: d.querySelectorAll('.vvp-item-tile').length,
+          attrs: t && [...t.attributes].map(a => a.name),
+          countLine: d.querySelector('#vvp-items-grid-container > p')?.textContent.trim()
+        });
+        ```
+      render: text
+
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome version
+      placeholder: "141.0.7390.55"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I am signed in to Amazon and the sweep did not stop with a sign-in or CAPTCHA banner
+          required: true
+        - label: I reloaded the extension at chrome://extensions after updating it
+          required: true
