@@ -150,6 +150,12 @@ against `https://coderabbit.ai/integrations/schema.v2.json`.
 
 ## Git
 
+`main` is protected by a repository ruleset ("main protection"): changes land through a
+pull request, CI (`test (22.x)` and `test (24.x)`) must pass, and force-pushes and branch
+deletion are blocked. Required approvals are 0, so a solo maintainer can merge their own
+PR — but the PR itself is not optional. Work on a branch and open a PR; do not assume a
+direct push to `main` will be accepted.
+
 If a push or `gh pr merge` is refused with *"refusing to allow an OAuth App to create or
 update workflow ... without `workflow` scope"*, the `gh` token is missing that scope. Fix
 it once with `gh auth refresh -s workflow` (interactive device flow) rather than working
