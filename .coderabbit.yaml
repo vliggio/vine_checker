@@ -156,7 +156,8 @@ reviews:
         forbidden.
 
         Pass `node --test` explicit files, never a directory: `node --test test/`
-        resolves the directory as a module and fails on Node 22/24.
+        resolves the directory as a module. It fails on Node 24 but works on 26, so a
+        local pass is not proof.
 
     - path: "manifest.json"
       instructions: |-
@@ -175,8 +176,13 @@ reviews:
     - path: ".github/workflows/**"
       instructions: |-
         There is no install step and there must not be one — the project has no
-        dependencies. Node 22 is the floor (`npm test` uses `--disable-warning`, added
-        in 21.3). Keep `permissions:` least-privilege and pin actions as they are now.
+        dependencies. The matrix is Node 24 (supported floor, active LTS) and 26 (what
+        development runs on). Keep both: a 26-only regression would otherwise reach main
+        unnoticed. Keep `permissions:` least-privilege and pin actions as they are now.
+
+        The `main` ruleset pins required status checks by job name, so renaming a matrix
+        entry makes PRs unmergeable until the ruleset is retargeted. Flag any change to
+        the matrix values.
 
   labeling_instructions:
     - label: bug

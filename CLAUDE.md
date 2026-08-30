@@ -24,7 +24,8 @@ Add `--disable-warning=MODULE_TYPELESS_PACKAGE_JSON` when invoking `node --test`
 to silence the ESM-detection warning (`npm test` already does).
 
 Pass `node --test` explicit files, never a directory — `node --test test/` resolves the
-directory as a module and fails on Node 22/24.
+directory as a module. It fails on Node 24 but happened to work on 26, so a local pass
+is not proof.
 
 There is no build step, no bundler, and no runtime dependencies. This is a hard constraint:
 the repo must stay loadable as an unpacked folder.
@@ -126,7 +127,7 @@ which fetches one real search the way a sweep does and prints what it extracted 
 `parsed: 0` or `degraded: yes` means selectors need updating. Don't try to add DOM unit
 tests without adding a dependency, which the no-dependencies constraint forbids.
 
-CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run manifest` on Node 22 and 24.
+CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run manifest` on Node 24 and 26.
 
 ## Conventions
 
@@ -151,7 +152,7 @@ against `https://coderabbit.ai/integrations/schema.v2.json`.
 ## Git
 
 `main` is protected by a repository ruleset ("main protection"): changes land through a
-pull request, CI (`test (22.x)` and `test (24.x)`) must pass, and force-pushes and branch
+pull request, CI (`test (24.x)` and `test (26.x)`) must pass, and force-pushes and branch
 deletion are blocked. Required approvals are 0, so a solo maintainer can merge their own
 PR — but the PR itself is not optional. Work on a branch and open a PR; do not assume a
 direct push to `main` will be accepted.
