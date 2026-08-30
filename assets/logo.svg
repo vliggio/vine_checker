@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 88" width="380" height="88" role="img" aria-label="Vine Checker">
+  <title>Vine Checker</title>
+  <defs>
+    <linearGradient id="vc-logo-badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3aad70" />
+      <stop offset="1" stop-color="#0d6644" />
+    </linearGradient>
+    <!-- One mid green rather than a light/dark pair: this file is consumed as an
+         <img>, where prefers-color-scheme follows the browser and can disagree with
+         the host page's theme. #26996a clears 3:1 on both white and near-black. -->
+    <style>
+      .vc-word { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #26996a; }
+      .vc-thin { font-weight: 400; }
+      .vc-bold { font-weight: 700; }
+    </style>
+  </defs>
+
+  <g transform="translate(4 8) scale(0.5625)">
+    <rect width="128" height="128" rx="28" fill="url(#vc-logo-badge)" />
+    <path d="M 22 106 C 14 56 46 18 114 12 C 108 80 70 106 22 106 Z" fill="#ffffff" />
+    <path d="M 40 70 L 56 86 L 88 48" fill="none" stroke="#0d6644" stroke-width="16"
+          stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <text x="96" y="58" class="vc-word" font-size="38" letter-spacing="-0.5">
+    <tspan class="vc-thin">Vine</tspan><tspan class="vc-bold" dx="9">Checker</tspan>
+  </text>
+</svg>

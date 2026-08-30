@@ -1,4 +1,4 @@
-# Vine Checker
+<img src="assets/logo.svg" alt="Vine Checker" width="300">
 
 A Chrome extension that sweeps your saved Amazon Vine searches, tells you which ones
 have items right now, and flags the items you have never seen before.
@@ -12,7 +12,7 @@ is sent anywhere, and no Amazon API is involved.
 2. **Load unpacked** → pick this folder.
 3. Pin the extension so you can see the badge.
 
-The icons are checked in; regenerate them with `npm run icons` if you change the design.
+The icons are checked in, so there is nothing to build first.
 
 ## Use
 
@@ -96,6 +96,25 @@ npm test
 
 Covers the pure helpers: ASIN extraction, the availability line, response classification,
 the regex fallback, URL paging, import parsing and dedupe.
+
+### Artwork
+
+`assets/icon.svg` is the single source of truth for the mark — a leaf carrying a
+checkmark. The leaf silhouette is what keeps it recognisable at 16px, where a bare
+checkmark would look like every other extension. `assets/logo.svg` is the horizontal
+lockup for docs.
+
+After editing `assets/icon.svg`, regenerate the toolbar PNGs:
+
+```bash
+npm run icons
+```
+
+That rasterises the SVG through headless Chrome, so there is no image library to
+install — if you can load this extension, you can build its icons. Set `CHROME=` to
+point at a different binary.
+
+### Parser coverage
 
 The DOM parse path needs a browser, so it is verified live instead: **Options → Self-test**
 fetches one search the same way a sweep does and prints what was extracted. Run it after any
