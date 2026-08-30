@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/*.test.mjs",
     "manifest": "node tools/check-manifest.js",
     "icons": "node tools/make-icons.js"
   }
