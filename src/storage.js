@@ -16,7 +16,8 @@ export const DEFAULT_SETTINGS = {
   delayMs: 1500,
   maxPages: 2,
   reuseExistingTab: true,
-  sortBy: 'count'
+  sortBy: 'count',
+  hideSeen: false
 };
 
 const SEEN_HIGH_WATER = 60000;
