@@ -136,7 +136,8 @@ const SETTING_FIELDS = {
   notify: 'checkbox',
   delayMs: 'number',
   maxPages: 'number',
-  reuseExistingTab: 'checkbox'
+  reuseExistingTab: 'checkbox',
+  sortBy: 'select'
 };
 
 function renderSettings() {
@@ -162,7 +163,8 @@ function renderEta() {
 for (const [key, kind] of Object.entries(SETTING_FIELDS)) {
   $(key).addEventListener('change', async () => {
     const el = $(key);
-    settings = await setSettings({ [key]: kind === 'checkbox' ? el.checked : Number(el.value) });
+    const value = kind === 'checkbox' ? el.checked : kind === 'select' ? el.value : Number(el.value);
+    settings = await setSettings({ [key]: value });
     await chrome.runtime.sendMessage({ type: 'VC_SETTINGS_CHANGED' });
     renderEta();
   });

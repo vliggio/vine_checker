@@ -65,6 +65,7 @@ button.icon { background: transparent; border: none; font-size: 15px; padding: 4
 input[type="text"],
 input[type="number"],
 input[type="url"],
+select,
 textarea {
   font: inherit;
   color: var(--fg);

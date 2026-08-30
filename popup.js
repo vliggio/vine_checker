@@ -1,4 +1,4 @@
-import { getSearches, getResults, getSeen, getRunState, computeNewItems } from './src/storage.js';
+import { getSearches, getResults, getSeen, getRunState, getSettings, computeNewItems } from './src/storage.js';
 
 const $ = (id) => document.getElementById(id);
 const expanded = new Set();
@@ -28,12 +28,25 @@ function relTime(ts) {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
+/**
+ * Row order within a group. Sorting happens per group, not across the whole list,
+ * so searches with new items keep floating to the top whatever the setting says.
+ */
+const SORTERS = {
+  count: (a, b) =>
+    b.newItems.length - a.newItems.length ||
+    (b.result ? b.result.total : 0) - (a.result ? a.result.total : 0),
+  title: (a, b) =>
+    a.search.label.localeCompare(b.search.label, undefined, { numeric: true, sensitivity: 'base' })
+};
+
 async function render() {
-  const [searches, results, seen, run] = await Promise.all([
+  const [searches, results, seen, run, settings] = await Promise.all([
     getSearches(),
     getResults(),
     getSeen(),
-    getRunState()
+    getRunState(),
+    getSettings()
   ]);
 
   renderHeader(searches, run);
@@ -46,9 +59,12 @@ async function render() {
       return { search: s, result, newItems };
     });
 
-  const withNew = rows.filter((r) => r.newItems.length).sort((a, b) => b.newItems.length - a.newItems.length);
-  const errored = rows.filter((r) => r.result && r.result.status !== 'ok');
-  const stocked = rows.filter((r) => !r.newItems.length && r.result && r.result.status === 'ok' && r.result.total > 0);
+  const cmp = SORTERS[settings.sortBy] || SORTERS.count;
+  const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
+  const errored = rows.filter((r) => r.result && r.result.status !== 'ok').sort(cmp);
+  const stocked = rows
+    .filter((r) => !r.newItems.length && r.result && r.result.status === 'ok' && r.result.total > 0)
+    .sort(cmp);
   const empty = rows.filter((r) => !r.newItems.length && r.result && r.result.status === 'ok' && !r.result.total);
   const unchecked = rows.filter((r) => !r.result);
 
