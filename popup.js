@@ -82,18 +82,25 @@ async function render() {
     return;
   }
 
-  for (const row of [...withNew, ...errored, ...stocked]) list.append(renderRow(row));
+  // Acknowledged searches still have items, they just have nothing left to look at.
+  // hideSeen drops them from the list the way empty searches already are, so the rows
+  // that need attention are not buried under a tail of handled ones.
+  const visible = settings.hideSeen ? [...withNew, ...errored] : [...withNew, ...errored, ...stocked];
+  for (const row of visible) list.append(renderRow(row));
 
-  if (!withNew.length && !errored.length && !stocked.length) {
+  if (!visible.length) {
     const note = document.createElement('div');
     note.className = 'empty';
     note.textContent = rows.every((r) => !r.result)
       ? 'Nothing checked yet. Hit "Check all now".'
-      : 'No items in any of your searches right now.';
+      : stocked.length
+        ? 'Nothing new — every search with items has been seen.'
+        : 'No items in any of your searches right now.';
     list.append(note);
   }
 
   const parts = [];
+  if (settings.hideSeen && stocked.length) parts.push(`${stocked.length} already seen`);
   if (empty.length) parts.push(`${empty.length} with no items`);
   if (unchecked.length) parts.push(`${unchecked.length} not checked yet`);
   parts.push(`${rows.length} searches enabled`);

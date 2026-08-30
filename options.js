@@ -137,7 +137,8 @@ const SETTING_FIELDS = {
   delayMs: 'number',
   maxPages: 'number',
   reuseExistingTab: 'checkbox',
-  sortBy: 'select'
+  sortBy: 'select',
+  hideSeen: 'checkbox'
 };
 
 function renderSettings() {
