@@ -75,6 +75,14 @@ since a sweep cannot be exercised in CI. Mention it if you only tested the happy
 
 Screenshots help for anything touching the popup or options page.
 
+CodeRabbit reviews every pull request automatically. It has been told this project's
+constraints in [`.coderabbit.yaml`](.coderabbit.yaml) — no dependencies, sequential
+sweeps, the acknowledgement model, the classic-script split — so when it flags one of
+those it is usually right. Nothing it says blocks a merge; replying on the comment or
+`@coderabbitai resolve` is a fine answer. If it is wrong about a rule this project
+actually holds, fix the rule in `.coderabbit.yaml` in the same PR rather than arguing
+with it on every one.
+
 ## Reporting things
 
 - Bugs and parser breakage: [issue templates](https://github.com/vliggio/vine_checker/issues/new/choose)

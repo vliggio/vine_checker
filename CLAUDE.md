@@ -139,6 +139,15 @@ CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run manifest` on Node 2
   `isVineUrl()` in `src/urls.js`
 - `assets/icon.svg` is the single source of truth for the mark; `icons/*.png` are generated
 
+## Automated review
+
+`.coderabbit.yaml` configures the CodeRabbit bot that reviews every PR. It restates the
+constraints above as path instructions and advisory pre-merge checks — no dependencies,
+sequential sweeps, the acknowledgement model, the classic vs ES module split, the `page`
+paging param, the raw-fetch-not-rendered-DOM rule. If one of those rules changes, change
+it there in the same commit, or the bot keeps enforcing the old one. The file validates
+against `https://coderabbit.ai/integrations/schema.v2.json`.
+
 ## Git
 
 Pushing any change to `.github/workflows/` over the HTTPS remote fails — the `gh` OAuth

@@ -1,0 +1,298 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review configuration.
+#
+# Most of what matters in this repo is invisible from a diff: no dependencies and no
+# build step, a deliberately slow sweep, an acknowledgement model that must not be
+# short-circuited, and a module split that looks like an inconsistency until you know
+# why it is there. Everything below exists to teach the reviewer those constraints and
+# to stop it recommending the tooling a normal JS project would have.
+#
+# CLAUDE.md and CONTRIBUTING.md are the long form; they are also fed to the reviewer as
+# coding guidelines (see knowledge_base below).
+
+language: en-US
+
+tone_instructions: >-
+  Be direct and brief. This is a small personal tool: flag real bugs and violations of
+  the documented constraints. Skip style nits, ceremony, and comments that restate what
+  the code already says.
+
+early_access: false
+
+reviews:
+  profile: chill
+
+  # Solo maintainer. A review that can block the merge is friction, not safety.
+  request_changes_workflow: false
+
+  high_level_summary: true
+  collapse_walkthrough: true
+
+  # The one thing worth drawing is the worker -> collector -> parse hop, and most
+  # non-trivial changes here touch it.
+  sequence_diagrams: true
+
+  poem: false
+  in_progress_fortune: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+
+  # icons/*.png are generated from assets/icon.svg by `npm run icons`. The SVG is the
+  # source of truth; diffing the rasterised output is noise.
+  path_filters:
+    - "!icons/**"
+
+  path_instructions:
+    - path: "**/*.js"
+      instructions: |-
+        Hard constraints for this repository, in order of how often they get violated:
+
+        - No runtime dependencies, no bundler, no build step, no framework. The repo
+          must stay loadable as an unpacked extension folder straight from a clone.
+          Never suggest a library, a transpiler, a test framework, or a lint config
+          that would need installing. `node --test` and the standard library only.
+        - Sweeps stay sequential and throttled. Do not suggest parallelising requests,
+          removing or shrinking the inter-request delay, or retrying harder on rate
+          limiting. Slowness is the feature: 150 searches should look like a person
+          browsing, and a signed-out session should fail once rather than 150 times.
+        - Comments explain *why*, not *what*. Flag a comment that narrates the code.
+          Do not ask for docblocks on self-evident functions.
+
+        Match the surrounding style: single quotes, semicolons, 2-space indent, no
+        TypeScript, no JSDoc type annotations beyond the short `/** ... */` summaries
+        already in use.
+
+    - path: "src/background.js"
+      instructions: |-
+        The orchestrator service worker. Things that are easy to break here:
+
+        - It must never fetch Amazon directly. Every request goes out through
+          `chrome.tabs.sendMessage(VC_FETCH)` to the collector running in a real
+          amazon.com tab. That detour is load-bearing (same-origin cookies, and MV3
+          workers have no DOMParser). Flag any direct `fetch()` of a Vine URL.
+        - MV3 workers get evicted mid-sweep. In-memory globals do not survive; only
+          `runState` in chrome.storage.local does. Any new per-sweep state that has to
+          outlive a wake-up belongs in `runState`, persisted after every search — not
+          in a module-level variable. The exceptions are the deliberate in-memory
+          guards (`pumping`), which exist precisely because they should reset on wake.
+        - Abort semantics are deliberate: `signin_required`, `captcha` and
+          `rate_limited` abort the whole sweep; every other error marks that one search
+          and the sweep continues. Flag changes that blur the two.
+        - `finishRun` must stay idempotent — both `stopRun` and `pump` can reach it.
+          `stopRun` only flips `running: false` while a pump is active, so the pump
+          tears the tab down itself and never does so under an in-flight fetch.
+
+    - path: "src/{collector,parse}.js"
+      instructions: |-
+        These two must stay **classic scripts** — no `import`/`export`, no top-level
+        `await`, and they must keep working when loaded twice. `chrome.scripting
+        .executeScript({files})` injects classic scripts only. Flag any conversion to
+        an ES module, and flag pure helpers being added here instead of `src/urls.js`.
+
+        `parse.js` dual-exports on purpose: `globalThis.VineParse` in the browser,
+        `module.exports` under Node for the tests. Both paths must keep working.
+
+        Selector facts confirmed against live pages, all of which have already cost
+        someone time:
+
+        - `.vvp-item-tile[data-recommendation-id="MARKETPLACE#ASIN#token"]`; the ASIN is
+          segment 1. `.a-truncate-full` is the title, `data-img-url` the thumbnail.
+        - `#vvp-items-grid-container > p` carries the count line.
+        - The paging parameter is `page`. `pn` and `cn` are category nodes, and `pn=2`
+          silently returns "no results" instead of page 2.
+        - Never validate a selector against the rendered DOM. VineHelper and similar
+          extensions inject `vh-*` classes and a `data-asin` attribute that do not
+          exist in Amazon's server HTML. Only a raw `fetch()` response counts.
+
+        Parsing must degrade rather than throw: a page whose structure has moved should
+        report `degraded`, not blow up the sweep.
+
+    - path: "src/storage.js"
+      instructions: |-
+        The only durable state, all of it under `chrome.storage.local`: `searches`,
+        `seen`, `results`, `settings`, `runState`.
+
+        The acknowledgement model is the core design decision and the easiest thing to
+        wreck without noticing. An ASIN enters `seen` **only** when the user
+        acknowledges it (Open search / Mark seen / Mark all seen) — never at check time,
+        never as a side effect of a sweep. "New" means present in the current results
+        and absent from `seen`. Flag anything that writes to `seen` from the check path:
+        it would let a background sweep silently clear a find nobody has looked at.
+
+        New settings need a default in `DEFAULT_SETTINGS` and must tolerate storage
+        written by an older version.
+
+    - path: "src/urls.js"
+      instructions: |-
+        Pure, dependency-free URL helpers, deliberately kept out of `parse.js` so they
+        can be an ES module the worker can import. Do not suggest merging them back or
+        duplicating them into `parse.js`.
+
+        `www.amazon.com` only. Widening to another marketplace also needs
+        `manifest.json` host permissions and `isVineUrl()` updated — flag one without
+        the other. Anything added here is pure and should come with a unit test.
+
+    - path: "{popup,options}.{js,html,css}"
+      instructions: |-
+        Plain DOM, no framework. Build nodes with `document.createElement` and set text
+        via `textContent`; flag any `innerHTML` assignment built from scraped Amazon
+        data (titles and ASINs are untrusted input).
+
+        Check both light and dark: colours come from `theme.css` custom properties, so
+        flag hard-coded hex values. Keep controls keyboard-reachable and labelled.
+
+    - path: "test/**/*.mjs"
+      instructions: |-
+        `node --test` with the built-in `assert`, no test framework. Coverage here is
+        limited to the pure string helpers on purpose — the `parseVineHtml` DOM path
+        needs a browser and is verified live through Options → Self-test. Do not ask for
+        DOM unit tests or a jsdom-style harness; that would mean a dependency, which is
+        forbidden.
+
+        Pass `node --test` explicit files, never a directory: `node --test test/`
+        resolves the directory as a module and fails on Node 22/24.
+
+    - path: "manifest.json"
+      instructions: |-
+        MV3. Host permissions stay scoped to `www.amazon.com`; flag any widening,
+        especially `<all_urls>`. Every path referenced here must exist — `npm run
+        manifest` checks that, and a missing file surfaces at load time as a vague
+        Chrome error. New permissions need a reason in the PR description.
+
+    - path: "tools/*.js"
+      instructions: |-
+        CommonJS scripts run directly by npm scripts, Node standard library only.
+
+        `tools/make-icons.js` omits `--user-data-dir` deliberately: passing it makes
+        headless Chrome hang indefinitely on macOS. Do not suggest adding it back.
+
+    - path: ".github/workflows/**"
+      instructions: |-
+        There is no install step and there must not be one — the project has no
+        dependencies. Node 22 is the floor (`npm test` uses `--disable-warning`, added
+        in 21.3). Keep `permissions:` least-privilege and pin actions as they are now.
+
+  labeling_instructions:
+    - label: bug
+      instructions: Apply when the PR fixes incorrect behaviour in an existing feature.
+    - label: parser
+      instructions: >-
+        Apply when the PR touches src/parse.js, src/collector.js, or the Vine page
+        selectors and count-line handling.
+    - label: enhancement
+      instructions: Apply when the PR adds a new capability or user-visible option.
+    - label: dependencies
+      instructions: Apply when the PR updates GitHub Actions versions in .github/.
+  auto_apply_labels: false
+
+  finishing_touches:
+    # Generated docstrings restate what the code does; this codebase comments the
+    # non-obvious decisions instead, at the point of the decision.
+    docstrings:
+      enabled: false
+    # Test generation would aim at the DOM path, which cannot be unit tested without
+    # adding a dependency. See test/ above.
+    unit_tests:
+      enabled: false
+
+  pre_merge_checks:
+    # Warnings only. The maintainer merges their own work; a hard gate here would be
+    # ceremony, and CONTRIBUTING.md is explicit that ceremony is not the bar.
+    title:
+      mode: warning
+      requirements: >-
+        Short and specific about what changed. A conventional-commit style prefix
+        (fix:, feat:, docs:, ci:) is welcome but not required.
+    description:
+      mode: warning
+    # The repo has no docstring convention to hold a coverage number against.
+    docstrings:
+      mode: "off"
+    custom_checks:
+      - name: No dependencies and no build step
+        mode: warning
+        instructions: >-
+          Fail if the PR adds anything to "dependencies", "devDependencies",
+          "peerDependencies" or "optionalDependencies" in package.json; adds a lockfile
+          (package-lock.json, yarn.lock, pnpm-lock.yaml); adds a bundler, transpiler or
+          task-runner config (webpack, rollup, vite, esbuild, babel, tsconfig.json); or
+          introduces a build step that must run before the folder can be loaded
+          unpacked. Pass otherwise. Devcontainer and editor config files are fine.
+      - name: Sweeps stay sequential and throttled
+        mode: warning
+        instructions: >-
+          Fail if the PR issues Vine requests concurrently (Promise.all or equivalent
+          over searches or pages), removes or bypasses the inter-request delay, lowers
+          the default delayMs, or adds automatic retries against a rate-limited or
+          signed-out session. Pass if request pacing is unchanged or made slower.
+      - name: Verification stated
+        mode: warning
+        instructions: >-
+          CI cannot exercise a real sweep. Fail if the PR changes anything under src/,
+          popup.*, options.* or manifest.json without the description saying what was
+          actually run - for example npm test, npm run manifest, a real sweep after
+          loading unpacked, or Options - Self-test. Pass for docs-only, workflow-only
+          or test-only changes.
+
+  tools:
+    # Useful here, and none of them need anything installed in the repo.
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    github-checks:
+      enabled: true
+    shellcheck:
+      enabled: true
+    htmlhint:
+      enabled: true
+    ast-grep:
+      essential_rules: true
+
+    # Oxlint's defaults are the correctness rules only, so it catches real mistakes
+    # without opinions about formatting.
+    oxc:
+      enabled: true
+
+    # Off on purpose: the repo carries no ESLint, Biome or Stylelint config, and
+    # running them on defaults would produce formatting opinions the codebase has
+    # deliberately not adopted. Adding a config would mean adding a dependency.
+    eslint:
+      enabled: false
+    biome:
+      enabled: false
+    stylelint:
+      enabled: false
+    # Prose in README/CONTRIBUTING is written the way it is on purpose.
+    languagetool:
+      enabled: false
+
+chat:
+  auto_reply: true
+  art: false
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    # These two carry the constraints that a diff cannot show. Listing them explicitly
+    # replaces the default pattern set, so CLAUDE.md is repeated here.
+    filePatterns:
+      - "CLAUDE.md"
+      - "CONTRIBUTING.md"
+      - "**/AGENTS.md"
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
