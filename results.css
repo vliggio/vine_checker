@@ -1,0 +1,13 @@
+/* Full-page shell only — everything else lives in view.css, shared with popup.html. */
+body { min-height: 100vh; }
+
+header { padding: 12px 16px 10px; }
+header .head-row,
+main,
+footer { max-width: 1100px; margin-inline: auto; width: 100%; box-sizing: border-box; }
+
+main { padding: 12px 16px; }
+footer { padding: 9px 16px; }
+
+/* More width than the popup has, so show the thumbnails a little larger. */
+.items { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
