@@ -141,6 +141,8 @@ CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run manifest` on Node 2
 
 ## Git
 
-Pushing any change to `.github/workflows/` over the HTTPS remote fails — the `gh` OAuth
-token lacks the `workflow` scope. Push over SSH (`git@github.com:vliggio/vine_checker.git`)
-or run `gh auth refresh -s workflow`.
+If a push or `gh pr merge` is refused with *"refusing to allow an OAuth App to create or
+update workflow ... without `workflow` scope"*, the `gh` token is missing that scope. Fix
+it once with `gh auth refresh -s workflow` (interactive device flow) rather than working
+around it per-push. Note the refusal applies to the GitHub *merge API* too, not just git
+pushes, so it can block merging someone else's workflow-touching PR.
