@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Packed extension builds
+*.zip
+*.crx
+*.pem
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*

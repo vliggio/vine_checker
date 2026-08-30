@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vine Checker — Options</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Vine Checker</h1>
+
+      <section>
+        <h2>Add searches</h2>
+        <p class="hint">
+          One per line. Either a bare Vine URL, or <code>Label&#9;URL</code> (tab) /
+          <code>Label, URL</code> (comma). Lines starting with <code>#</code> are ignored.
+          Only <code>https://www.amazon.com/vine/…</code> URLs are accepted.
+        </p>
+        <textarea id="import-text" rows="7" spellcheck="false"
+          placeholder="Mechanical keyboards&#9;https://www.amazon.com/vine/vine-items?queue=potluck&amp;search=mechanical+keyboard"></textarea>
+        <div class="actions">
+          <button id="import" class="primary">Import</button>
+          <button id="export" class="ghost">Copy all as text</button>
+          <span id="import-result" class="result"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Your searches (<span id="count">0</span>)</h2>
+        <div class="actions">
+          <input type="text" id="filter" placeholder="Filter…" />
+          <div class="spacer"></div>
+          <button id="enable-all" class="ghost">Enable all</button>
+          <button id="disable-all" class="ghost">Disable all</button>
+        </div>
+        <div id="searches" class="searches"></div>
+      </section>
+
+      <section>
+        <h2>Checking</h2>
+        <div class="settings">
+          <label class="check">
+            <input type="checkbox" id="autoCheck" />
+            <span>Check automatically in the background</span>
+          </label>
+          <label>
+            <span>Every</span>
+            <input type="number" id="intervalMinutes" min="5" max="1440" step="5" />
+            <span class="unit">minutes</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="notify" />
+            <span>Desktop notification when new items appear</span>
+          </label>
+          <label>
+            <span>Delay between requests</span>
+            <input type="number" id="delayMs" min="250" max="10000" step="250" />
+            <span class="unit">ms <em id="eta"></em></span>
+          </label>
+          <label>
+            <span>Pages per search</span>
+            <input type="number" id="maxPages" min="1" max="10" step="1" />
+            <span class="unit">× 36 items</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="reuseExistingTab" />
+            <span>Reuse an open amazon.com tab instead of opening one</span>
+          </label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Self-test</h2>
+        <p class="hint">
+          Fetches one search exactly the way a sweep does and shows what was extracted.
+          Run this after any Amazon layout change.
+        </p>
+        <div class="actions">
+          <input type="text" id="selftest-url" placeholder="https://www.amazon.com/vine/vine-items?queue=potluck&amp;search=keyboard" />
+          <button id="selftest">Run</button>
+        </div>
+        <pre id="selftest-out" class="out hidden"></pre>
+      </section>
+
+      <section>
+        <h2>Reset</h2>
+        <div class="actions">
+          <button id="reset-seen" class="danger">Forget all seen items</button>
+          <button id="reset-all" class="danger">Delete all searches and data</button>
+          <span id="reset-result" class="result"></span>
+        </div>
+        <p class="hint">
+          Forgetting seen items makes everything currently listed count as new again.
+        </p>
+      </section>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

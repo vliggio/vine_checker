@@ -1,0 +1,10 @@
+{
+  "name": "vine-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension that sweeps saved Amazon Vine searches for new items.",
+  "scripts": {
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/",
+    "icons": "node tools/make-icons.js"
+  }
+}
