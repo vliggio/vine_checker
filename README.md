@@ -1,4 +1,7 @@
-# Vine Checker
+<img src="assets/logo.svg" alt="Vine Checker" width="300">
+
+[![CI](https://github.com/vliggio/vine_checker/actions/workflows/ci.yml/badge.svg)](https://github.com/vliggio/vine_checker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-1a8256)](LICENSE)
 
 A Chrome extension that sweeps your saved Amazon Vine searches, tells you which ones
 have items right now, and flags the items you have never seen before.
@@ -12,7 +15,7 @@ is sent anywhere, and no Amazon API is involved.
 2. **Load unpacked** → pick this folder.
 3. Pin the extension so you can see the badge.
 
-The icons are checked in; regenerate them with `npm run icons` if you change the design.
+The icons are checked in, so there is nothing to build first.
 
 ## Use
 
@@ -91,11 +94,32 @@ The popup and self-test both surface that as *degraded*.
 ## Development
 
 ```bash
-npm test
+npm test          # pure helpers: ASIN extraction, availability line, response
+                  # classification, regex fallback, URL paging, import and dedupe
+npm run manifest  # manifest.json is valid and every file it references exists
 ```
 
-Covers the pure helpers: ASIN extraction, the availability line, response classification,
-the regex fallback, URL paging, import parsing and dedupe.
+Both run in CI on Node 22 and 24. There is nothing to install first — the extension has
+no runtime dependencies and no build step, by design.
+
+### Artwork
+
+`assets/icon.svg` is the single source of truth for the mark — a leaf carrying a
+checkmark. The leaf silhouette is what keeps it recognisable at 16px, where a bare
+checkmark would look like every other extension. `assets/logo.svg` is the horizontal
+lockup for docs.
+
+After editing `assets/icon.svg`, regenerate the toolbar PNGs:
+
+```bash
+npm run icons
+```
+
+That rasterises the SVG through headless Chrome, so there is no image library to
+install — if you can load this extension, you can build its icons. Set `CHROME=` to
+point at a different binary.
+
+### Parser coverage
 
 The DOM parse path needs a browser, so it is verified live instead: **Options → Self-test**
 fetches one search the same way a sweep does and prints what was extracted. Run it after any
@@ -108,3 +132,19 @@ Amazon layout change — if `parsed` is 0 or `degraded` is yes, the selectors ab
 - Only counts and identifies items; it does not order anything.
 - Vine search relevance ordering means a very large result set may hide new items beyond
   the page limit. See *Pages per search*.
+
+## Contributing and reporting
+
+- [Report a bug or parser breakage](https://github.com/vliggio/vine_checker/issues/new/choose)
+- [CONTRIBUTING.md](CONTRIBUTING.md) — setup, the parser traps, and what gets declined
+- [SECURITY.md](SECURITY.md) — report vulnerabilities privately, plus what this
+  extension can actually reach
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
+## License
+
+[MIT](LICENSE) © Vince Liggio.
+
+Not affiliated with, endorsed by, or connected to Amazon. "Amazon" and "Amazon Vine" are
+trademarks of Amazon.com, Inc. This tool reads pages you are already signed in to and
+entitled to view; you are responsible for using it within the Vine program's terms.

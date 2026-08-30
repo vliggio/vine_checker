@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a personal tool kept deliberately small. Ideas are welcome, but a
+        feature may be declined simply because it is not worth the ongoing upkeep —
+        that is not a judgement on the idea.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: |
+        Describe the situation you are in, not the solution you have in mind. The
+        underlying problem often has a simpler answer than the proposed feature.
+      placeholder: |
+        Some of my searches return hundreds of items, and new ones show up past the
+        page limit, so I miss them unless I raise Pages per search for everything.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a design, describe it.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Does this need to reach Amazon?
+      description: |
+        Anything adding requests per sweep has to justify the extra load — 150
+        searches is already a lot of traffic.
+      options:
+        - "No — it only changes the UI or how stored data is presented"
+        - "Yes — it needs extra or different requests"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this project holds to
+      description: Confirm your idea fits, or say in the description why it should be an exception.
+      options:
+        - label: No runtime dependencies and no build step — it stays loadable as an unpacked folder
+        - label: Nothing leaves the machine; no backend, analytics or telemetry
+        - label: Sweeps stay sequential and throttled

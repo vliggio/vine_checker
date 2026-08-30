@@ -391,7 +391,7 @@ async function notifyBlocked(reason) {
 
 async function refreshBadge() {
   const total = await countNewTotal();
-  await chrome.action.setBadgeBackgroundColor({ color: '#c7511f' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#d13212' });
   await chrome.action.setBadgeText({ text: total ? (total > 99 ? '99+' : String(total)) : '' });
 }
 
