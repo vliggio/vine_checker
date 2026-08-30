@@ -11,11 +11,40 @@ is sent anywhere, and no Amazon API is involved.
 
 ## Install
 
-1. `chrome://extensions` → turn on **Developer mode** (top right).
-2. **Load unpacked** → pick this folder.
-3. Pin the extension so you can see the badge.
+This extension is not on the Chrome Web Store — you load it from source.
 
-The icons are checked in, so there is nothing to build first.
+**1. Get the code.**
+
+```bash
+git clone https://github.com/vliggio/vine_checker.git
+```
+
+No `npm install`, no build step: there are no runtime dependencies and the icons are
+checked in. (No git? Use **Code → Download ZIP** on the repo page and unzip it.)
+
+**2. Put the folder somewhere permanent.** Chrome loads an unpacked extension by path and
+re-reads it at every browser start, so moving or deleting the folder later breaks the
+extension. `~/Documents` or a projects directory is fine — `~/Downloads` is not.
+
+**3. Load it.**
+
+1. Open `chrome://extensions`
+2. Turn on **Developer mode** (top right)
+3. Click **Load unpacked** and select the `vine_checker` folder you just cloned
+4. Pin the extension so you can see the badge
+
+Chrome will show "Vine Checker" with a leaf icon. If you instead get an error, the folder
+you picked is probably a level off — select the one directly containing `manifest.json`.
+
+### Updating
+
+```bash
+git pull
+```
+
+Then open `chrome://extensions` and click the reload arrow on the Vine Checker card. Your
+searches, settings and seen-item history live in Chrome's extension storage, so they
+survive updates untouched.
 
 ## Use
 
