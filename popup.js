@@ -167,6 +167,9 @@ function renderRow({ search, result, newItems }) {
     ack.textContent = 'Mark seen';
     ack.addEventListener('click', async () => {
       await chrome.runtime.sendMessage({ type: 'VC_ACK', searchId: search.id });
+      // Acknowledging empties newItems, so the row would re-render as an empty shell
+      // holding one button. Collapse it — the click was the user saying "done with this".
+      expanded.delete(search.id);
       render();
     });
     actions.append(ack);
@@ -221,6 +224,7 @@ $('stop').addEventListener('click', async () => {
 
 $('ack-all').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'VC_ACK_ALL' });
+  expanded.clear(); // same reason as "Mark seen", for every row at once
   render();
 });
 
