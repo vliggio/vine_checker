@@ -14,7 +14,7 @@
   },
   "homepage": "https://github.com/vliggio/vine_checker#readme",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/*.test.mjs",

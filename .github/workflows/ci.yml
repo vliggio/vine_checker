@@ -15,8 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 22 is the floor: npm test uses --disable-warning, added in Node 21.3.
-        node: ["22.x", "24.x"]
+        # 24 is the supported floor (active LTS); 26 is what development happens on
+        # and becomes LTS in Oct 2026. Testing the version the maintainer actually
+        # runs matters: `node --test test/` passed on 26 while failing on 22 and 24,
+        # so a 26-only regression would otherwise reach main unnoticed.
+        node: ["24.x", "26.x"]
     steps:
       - uses: actions/checkout@v7
 

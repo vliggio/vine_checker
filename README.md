@@ -128,7 +128,7 @@ npm test          # pure helpers: ASIN extraction, availability line, response
 npm run manifest  # manifest.json is valid and every file it references exists
 ```
 
-Both run in CI on Node 22 and 24. There is nothing to install first — the extension has
+Both run in CI on Node 24 and 26. There is nothing to install first — the extension has
 no runtime dependencies and no build step, by design.
 
 ### Artwork
