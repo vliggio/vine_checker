@@ -2,7 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-import { withPage, labelFromUrl, isVineUrl, parseImportText, canonicalUrl } from '../src/urls.js';
+import {
+  withPage,
+  labelFromUrl,
+  isVineUrl,
+  parseImportText,
+  canonicalUrl,
+  sortSearches
+} from '../src/urls.js';
 
 const require = createRequire(import.meta.url);
 const { asinFromRecommendationId, parseCountLine, classify, asinsByRegex } = require('../src/parse.js');
@@ -60,6 +67,23 @@ test('labelFromUrl is the search term, with no queue suffix', () => {
   assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items?cn=123'), 'node 123');
   assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items'), 'vine items');
   assert.equal(labelFromUrl('not a url'), 'not a url');
+});
+
+test('sortSearches orders by label, case- and number-aware, with url as tiebreak', () => {
+  const searches = [
+    { id: '1', label: 'wool socks', url: 'https://www.amazon.com/vine/vine-items?search=b' },
+    { id: '2', label: 'Desk lamps', url: 'https://www.amazon.com/vine/vine-items?search=c' },
+    { id: '3', label: 'usb hub 10', url: 'https://www.amazon.com/vine/vine-items?search=d' },
+    { id: '4', label: 'usb hub 2', url: 'https://www.amazon.com/vine/vine-items?search=e' },
+    { id: '5', label: 'Desk lamps', url: 'https://www.amazon.com/vine/vine-items?search=a' }
+  ];
+  const sorted = sortSearches(searches);
+
+  assert.deepEqual(
+    sorted.map((s) => s.id),
+    ['5', '2', '4', '3', '1']
+  );
+  assert.deepEqual(searches.map((s) => s.id), ['1', '2', '3', '4', '5']); // input untouched
 });
 
 test('isVineUrl only accepts https vine pages on www.amazon.com', () => {
