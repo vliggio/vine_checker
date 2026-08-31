@@ -207,7 +207,6 @@ function renderHeader(searches, run) {
   if (msg) banner.textContent = msg;
 }
 
-/** The small muted line a row uses for status and footnotes. */
 function mutedLine(text) {
   const line = document.createElement('div');
   line.className = 'row-actions';
@@ -460,6 +459,10 @@ export function initView(viewMode) {
       render();
     } else if (msg.type === 'VC_MORE_PROGRESS') {
       rowNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
+      watchFetch(msg.searchId);
+      render();
+    } else if (msg.type === 'VC_RECHECK_PROGRESS') {
+      rowNote.set(msg.searchId, `Checking page ${msg.page}…`);
       watchFetch(msg.searchId);
       render();
     } else if (msg.type === 'VC_RECHECK_DONE') {

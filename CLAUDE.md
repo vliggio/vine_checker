@@ -145,7 +145,11 @@ prevented.
 Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_FETCH_MORE`,
 `VC_RECHECK`, `VC_SELFTEST`, `VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI
 broadcasts: `VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`,
-`VC_RECHECK_DONE`. Worker → collector: `VC_FETCH`.
+`VC_RECHECK_PROGRESS`, `VC_RECHECK_DONE`. Worker → collector: `VC_FETCH`.
+
+Both single-search jobs report per page, not just at the end: the view gives up on a
+silent job after 150s, and one page can outlast that on its own once the rate-limit
+back-off starts sleeping.
 
 `VC_FETCH_MORE` and `VC_RECHECK` answer immediately with `{started}` and report the
 rest by broadcast — the work takes longer than a message port stays open.

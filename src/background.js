@@ -28,7 +28,7 @@ const COLLECTOR_URL = 'https://www.amazon.com/vine/vine-items';
 
 /** Transient, per-service-worker-lifetime state. Everything durable lives in storage. */
 let pumping = false;
-/** Search id of the single-search job holding the collector (extra pages, or a recheck). */
+/** Held for the length of a recheck or a page walk, so the two cannot overlap. */
 let soloJob = null;
 /**
  * Claim on the collector, taken synchronously before any entry point awaits.
@@ -161,8 +161,13 @@ async function collect(url) {
 
 /* ------------------------------------------------------------------- run loop */
 
-/** Fetch every page of one search (up to maxPages) and merge the items. */
-async function checkSearch(search, settings) {
+/**
+ * Fetch every page of one search (up to maxPages) and merge the items.
+ *
+ * `onPage` exists for the recheck: a page can take over a minute once the rate-limit
+ * back-off kicks in, and the row watching it needs to hear something in the meantime.
+ */
+async function checkSearch(search, settings, onPage) {
   const items = [];
   const byAsin = new Set();
   let total = null;
@@ -172,6 +177,7 @@ async function checkSearch(search, settings) {
   for (let page = 1; page <= Math.max(1, settings.maxPages); page += 1) {
     if (page > lastPage) break;
 
+    if (onPage) onPage(page);
     const url = withPage(search.url, page);
     let res = await collect(url);
 
@@ -390,7 +396,9 @@ async function runRecheck(search) {
   let status = 'ok';
 
   try {
-    const outcome = await checkSearch(search, settings);
+    const outcome = await checkSearch(search, settings, (page) =>
+      broadcast({ type: 'VC_RECHECK_PROGRESS', searchId: search.id, page })
+    );
     if (outcome.abort) {
       // Signed out, CAPTCHA or throttled: nothing to store, and the row must say why.
       status = outcome.abort;
