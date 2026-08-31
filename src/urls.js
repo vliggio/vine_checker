@@ -33,6 +33,21 @@ export function labelFromUrl(url) {
   }
 }
 
+/**
+ * Searches by label, A-Z.
+ *
+ * Add order is not information anyone uses — nothing surfaces when a search was
+ * added — so the stored array is kept sorted and every reader (Options list, export,
+ * sweep queue) inherits it. URL breaks ties so the order cannot wobble between calls.
+ */
+export function sortSearches(searches) {
+  return [...searches].sort(
+    (a, b) =>
+      a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }) ||
+      a.url.localeCompare(b.url)
+  );
+}
+
 /** Only sweep real Vine pages on the marketplace we hold host permission for. */
 export function isVineUrl(url) {
   try {

@@ -9,6 +9,8 @@
  *   runState  {running, index, total, startedTs, finishedTs, abortReason, currentLabel}
  */
 
+import { sortSearches } from './urls.js';
+
 export const DEFAULT_SETTINGS = {
   autoCheck: false,
   intervalMinutes: 60,
@@ -34,12 +36,14 @@ async function set(key, value) {
 
 /* ---------- searches ---------- */
 
+// Sorted on read as well as write, so a list stored before this was introduced comes
+// out in order without a migration step.
 export async function getSearches() {
-  return get('searches', []);
+  return sortSearches(await get('searches', []));
 }
 
 export async function setSearches(searches) {
-  await set('searches', searches);
+  await set('searches', sortSearches(searches));
 }
 
 export async function getEnabledSearches() {

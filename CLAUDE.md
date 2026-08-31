@@ -79,8 +79,13 @@ UI to one surface and not the other is how these drift — put it in `view.js`.
 ### State
 
 Everything durable is in `chrome.storage.local` behind `src/storage.js`. Keys: `searches`,
-`seen`, `results`, `settings`, `runState`. Service worker globals do not survive eviction
-mid-sweep — only `runState` does.
+`seen`, `results`, `settings`, `runState`.
+
+`searches` is kept sorted by label: `getSearches`/`setSearches` normalise through
+`sortSearches()`, so the Options list, the text export and the sweep queue all inherit
+one order and nothing has to sort at the call site.
+
+Service worker globals do not survive eviction mid-sweep — only `runState` does.
 
 **The acknowledgement model is the core design decision.** An ASIN enters `seen` *only*
 when the user acknowledges it (Open search / Mark seen / Mark all seen), never at check

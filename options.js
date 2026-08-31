@@ -6,7 +6,7 @@ import {
   clearSeen,
   DEFAULT_SETTINGS
 } from './src/storage.js';
-import { parseImportText, canonicalUrl, isVineUrl } from './src/urls.js';
+import { parseImportText, canonicalUrl, isVineUrl, sortSearches } from './src/urls.js';
 
 const $ = (id) => document.getElementById(id);
 let searches = [];
@@ -43,6 +43,7 @@ function renderSearches() {
       search.label = label.value.trim() || search.label;
       label.value = search.label;
       await persist();
+      renderSearches(); // a rename can move the row, so redraw rather than leave it lying
     });
 
     const link = document.createElement('a');
@@ -70,6 +71,9 @@ function renderSearches() {
 }
 
 async function persist() {
+  // storage sorts on the way in; keep the in-memory copy in step so the rendered
+  // list and the stored one cannot disagree about where a row belongs.
+  searches = sortSearches(searches);
   await setSearches(searches);
 }
 
