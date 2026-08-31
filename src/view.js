@@ -22,6 +22,33 @@ const pageFetchNote = new Map();
 /** Last settings read by render(), for the row builders that need one or two of them. */
 let currentSettings = {};
 
+/** searchId -> timer that stops the row claiming a walk is still going. */
+const pageFetchWatchdogs = new Map();
+
+/**
+ * A page can legitimately take over a minute: the rate-limit back-off alone sleeps
+ * 5s, 15s and 45s before giving up. Past that, silence means the service worker was
+ * evicted mid-walk and nothing is coming.
+ */
+const FETCH_SILENCE_MS = 150000;
+
+function watchFetch(searchId) {
+  clearTimeout(pageFetchWatchdogs.get(searchId));
+  pageFetchWatchdogs.set(
+    searchId,
+    setTimeout(() => {
+      pageFetchWatchdogs.delete(searchId);
+      // Pages are persisted as they arrive, so nothing fetched is lost — only the loop.
+      flashNote(searchId, 'Stopped early. Pages already fetched were kept — click to carry on.');
+    }, FETCH_SILENCE_MS)
+  );
+}
+
+function stopWatchingFetch(searchId) {
+  clearTimeout(pageFetchWatchdogs.get(searchId));
+  pageFetchWatchdogs.delete(searchId);
+}
+
 const FETCH_MORE_REFUSED = {
   sweep_running: 'Wait for the sweep to finish.',
   already_fetching: 'Already fetching pages for another search.',
@@ -219,6 +246,7 @@ function renderTruncationNote(search, result) {
     const res = await chrome.runtime.sendMessage({ type: 'VC_FETCH_MORE', searchId: search.id });
     if (res && res.started) {
       pageFetchNote.set(search.id, 'Fetching…');
+      watchFetch(search.id);
       render();
     } else {
       flashNote(search.id, (res && FETCH_MORE_REFUSED[res.reason]) || 'Could not start.');
@@ -231,6 +259,7 @@ function renderTruncationNote(search, result) {
 
 /** Show a one-off line on the row, then let the row go back to what it was saying. */
 function flashNote(searchId, text) {
+  stopWatchingFetch(searchId);
   pageFetchNote.set(searchId, text);
   render();
   setTimeout(() => {
@@ -413,8 +442,10 @@ export function initView(viewMode) {
       render();
     } else if (msg.type === 'VC_MORE_PROGRESS') {
       pageFetchNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
+      watchFetch(msg.searchId);
       render();
     } else if (msg.type === 'VC_MORE_DONE') {
+      stopWatchingFetch(msg.searchId);
       pageFetchNote.delete(msg.searchId);
       if (msg.status === 'ok') render();
       else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
