@@ -7,6 +7,7 @@
  */
 
 import {
+  getSearches,
   getEnabledSearches,
   getResults,
   getSeen,
@@ -26,6 +27,8 @@ const COLLECTOR_URL = 'https://www.amazon.com/vine/vine-items';
 
 /** Transient, per-service-worker-lifetime state. Everything durable lives in storage. */
 let pumping = false;
+/** Search id whose skipped pages are being pulled on demand, or null. */
+let fetchingMore = null;
 let collectorTabId = null;
 let collectorTabIsOurs = false;
 /** Tabs that refused injection, so we stop re-picking the same broken host. */
@@ -205,11 +208,123 @@ async function checkSearch(search, settings) {
       status: 'ok',
       total: total === null ? items.length : total,
       pagesFetched: Math.min(lastPage, Math.max(1, settings.maxPages)),
+      lastPage,
       truncated: lastPage > settings.maxPages,
       degraded,
       items
     }
   };
+}
+
+/* ------------------------------------------------------- on-demand extra pages */
+
+/**
+ * Pull the pages a sweep skipped for one search.
+ *
+ * Raising "Pages per search" is the alternative, and it is a bad one: it applies to
+ * all ~150 searches and only takes effect on the next full sweep. Vine orders results
+ * by relevance rather than date, so the new item you want is exactly the one sitting
+ * past the cut.
+ *
+ * Returns as soon as the walk starts; progress arrives as VC_MORE_PROGRESS and the
+ * outcome as VC_MORE_DONE, because the walk can take minutes and a message port
+ * cannot be held open that long.
+ */
+async function startFetchMore(searchId) {
+  const state = await getRunState();
+  if (state.running) return { started: false, reason: 'sweep_running' };
+  if (fetchingMore) return { started: false, reason: 'already_fetching' };
+
+  const [searches, results] = await Promise.all([getSearches(), getResults()]);
+  const search = searches.find((s) => s.id === searchId);
+  const result = results[searchId];
+  if (!search || !result || result.status !== 'ok' || !result.truncated) {
+    return { started: false, reason: 'nothing_to_fetch' };
+  }
+
+  fetchingMore = searchId;
+  // Same keepalive a sweep uses: at the configured delay this outlives the worker's
+  // idle timeout long before it runs out of pages.
+  await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+
+  runFetchMore(search, result).finally(async () => {
+    fetchingMore = null;
+    await chrome.alarms.clear(KEEPALIVE_ALARM);
+    await releaseCollectorTab();
+  });
+
+  return { started: true };
+}
+
+async function runFetchMore(search, result) {
+  const settings = await getSettings();
+  const byAsin = new Set((result.items || []).map((i) => i.asin));
+  const items = [...(result.items || [])];
+  let fetchedThrough = Math.max(1, result.pagesFetched || 1);
+  // Results written before lastPage was recorded do not know where the end is. Ask for
+  // one more page; the response says how far it actually goes.
+  let lastPage = result.lastPage || fetchedThrough + 1;
+  let degraded = !!result.degraded;
+  let status = 'ok';
+
+  try {
+    for (let page = fetchedThrough + 1; page <= lastPage; page += 1) {
+      broadcast({ type: 'VC_MORE_PROGRESS', searchId: search.id, page, lastPage });
+
+      const url = withPage(search.url, page);
+      let res = await collect(url);
+
+      // Same back-off as a sweep. One search asking for its own pages is not a reason
+      // to lean on a session that is already being throttled.
+      for (let retry = 0; res && res.status === 'rate_limited' && retry < 3; retry += 1) {
+        await sleep([5000, 15000, 45000][retry]);
+        res = await collect(url);
+      }
+
+      if (!res || !res.ok) {
+        status = (res && res.status) || 'network_error';
+        break;
+      }
+
+      lastPage = res.lastPage || lastPage;
+      degraded = degraded || !!res.degraded;
+      for (const item of res.items) {
+        if (byAsin.has(item.asin)) continue;
+        byAsin.add(item.asin);
+        items.push(item);
+      }
+      fetchedThrough = page;
+      // An empty page is the end of the results, whatever the pagination claimed.
+      if (!res.items.length) lastPage = fetchedThrough;
+
+      // Persisted per page: an eviction costs the loop, never the pages already paid
+      // for. Items land in `results` only — acknowledgement stays the user's move.
+      await updateResult(search.id, {
+        ...result,
+        items,
+        degraded,
+        lastPage,
+        pagesFetched: fetchedThrough,
+        truncated: fetchedThrough < lastPage
+      });
+      await refreshBadge();
+
+      if (!res.items.length) break;
+      if (page < lastPage) await throttle(settings);
+    }
+  } catch (err) {
+    status = 'error';
+    console.error('[vine-checker] fetching remaining pages failed', err);
+  }
+
+  broadcast({
+    type: 'VC_MORE_DONE',
+    searchId: search.id,
+    status,
+    pagesFetched: fetchedThrough,
+    lastPage,
+    newTotal: await countNewTotal()
+  });
 }
 
 function throttle(settings) {
@@ -220,6 +335,8 @@ function throttle(settings) {
 export async function startRun({ manual = true } = {}) {
   const state = await getRunState();
   if (state.running) return { started: false, reason: 'already_running' };
+  // They share the collector tab and the same rate limit.
+  if (fetchingMore) return { started: false, reason: 'fetching_more' };
 
   const searches = await getEnabledSearches();
   if (!searches.length) return { started: false, reason: 'no_searches' };
@@ -455,6 +572,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+
+      case 'VC_FETCH_MORE':
+        sendResponse(await startFetchMore(msg.searchId));
+        break;
 
       case 'VC_SELFTEST': {
         const res = await collect(msg.url);

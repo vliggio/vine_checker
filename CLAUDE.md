@@ -104,6 +104,20 @@ A 150-search sweep runs ~10–15 minutes, far longer than an MV3 worker's idle l
 - `stopRun` only flips `running: false` when a pump is active — the pump notices and calls
   `finishRun` itself, so the collector tab is never torn down under an in-flight fetch
 
+### On-demand paging
+
+`startFetchMore()` pulls the pages a sweep skipped for one search (results page only —
+the popup dies on focus loss). It shares the sweep's machinery deliberately: same
+`collect()`, same `throttle()`, same rate-limit back-off. Two constraints fall out of
+that sharing:
+
+- it refuses while `runState.running`, and `startRun` refuses while it is going — they
+  would otherwise fight over the collector tab and the same rate limit
+- the merged result is persisted after *every* page, because the in-memory loop dies
+  with the worker and only what reached storage survives
+
+Items it pulls land in `results` only. Acknowledgement is still the user's move.
+
 **Abort semantics:** `signin_required`, `captcha` and `rate_limited` abort the entire
 sweep. Any other error marks that one search and the sweep continues. This distinction is
 deliberate — 150 doomed requests against a signed-out session is the failure mode being
@@ -111,9 +125,13 @@ prevented.
 
 ### Messages
 
-Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_SELFTEST`,
-`VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI broadcasts: `VC_PROGRESS`,
-`VC_DONE`. Worker → collector: `VC_FETCH`.
+Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_FETCH_MORE`,
+`VC_SELFTEST`, `VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI broadcasts:
+`VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`. Worker → collector:
+`VC_FETCH`.
+
+`VC_FETCH_MORE` answers immediately with `{started}` and reports the rest by
+broadcast — the walk takes minutes and a message port does not stay open that long.
 
 ## Vine page facts (confirmed against live pages, Aug 2026)
 

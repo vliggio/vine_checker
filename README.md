@@ -69,6 +69,12 @@ long list: it stays open next to the Vine tabs you are triaging, resizes, and sh
 thumbnails per row. It picks up sweep progress live, and reuses an already-open results
 tab instead of stacking duplicates.
 
+**Searches with more pages than you swept.** A search whose results ran past *Pages per
+search* says so when expanded, and in the tab view offers to fetch the rest right there
+— one search, at the same delay a sweep uses, without re-running all 150 at a higher
+page count. It refuses while a sweep is running, since both go through the same tab and
+the same rate limit.
+
 **New means never acknowledged.** An item counts as new until you acknowledge it — by
 hitting *Open search*, *Mark seen* on a row, or *Mark all seen*. Repeated sweeps will not
 quietly clear a find you haven't looked at yet. Newness is global: an ASIN you have seen
