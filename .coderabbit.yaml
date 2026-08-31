@@ -84,13 +84,16 @@ reviews:
         - Abort semantics are deliberate: `signin_required`, `captcha` and
           `rate_limited` abort the whole sweep; every other error marks that one search
           and the sweep continues. Flag changes that blur the two.
-        - On-demand paging (`startFetchMore`) shares the sweep's `collect`, `throttle`
-          and back-off on purpose, and each side refuses while the other is running:
-          they contend for the collector tab and the same rate limit. One click pulls at
-          most `maxPages`. It persists the merged result after every page, because its
-          loop is in-memory and dies with the worker. Flag anything that lets the two run
-          at once, skips the delay, unbounds the per-click page count, or batches the
-          writes to the end.
+        - The single-search jobs (`startRecheck`, `startFetchMore`) share the sweep's
+          `collect`, `throttle` and back-off on purpose, and every entry point refuses
+          while another is running: they contend for the collector tab and the same rate
+          limit. The `claimingCollector` claim must stay synchronous — taken before the
+          first await — or two clicks in one tick both get through. On-demand paging
+          pulls at most `maxPages` per click and persists the merged result after every
+          page, because its loop is in-memory and dies with the worker. A recheck
+          refreshes the badge but must not notify. Flag anything that lets two of them
+          run at once, skips the delay, unbounds the per-click page count, or batches
+          the writes to the end.
         - `finishRun` must stay idempotent — both `stopRun` and `pump` can reach it.
           `stopRun` only flips `running: false` while a pump is active, so the pump
           tears the tab down itself and never does so under an in-flight fetch.
