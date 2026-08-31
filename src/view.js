@@ -16,13 +16,25 @@ let mode = 'popup';
 /** Ids of the rows currently drawn, so "Expand all" knows what it is acting on. */
 let visibleIds = [];
 
+/** searchId -> the line shown in place of the truncation note while pages are pulled. */
+const pageFetchNote = new Map();
+
+/** Last settings read by render(), for the row builders that need one or two of them. */
+let currentSettings = {};
+
+const FETCH_MORE_REFUSED = {
+  sweep_running: 'Wait for the sweep to finish.',
+  already_fetching: 'Already fetching pages for another search.',
+  nothing_to_fetch: 'Nothing left to fetch.'
+};
+
 // The popup is 460px wide; the page has room for a lot more before scrolling hurts.
 const ITEM_CAP = { popup: 24, page: 72 };
 
 const STATUS_TEXT = {
   signin_required: 'Signed out of Amazon',
   captcha: 'Amazon showed a CAPTCHA',
-  rate_limited: 'Amazon rate-limited the sweep',
+  rate_limited: 'Amazon is rate-limiting requests',
   http_error: 'Amazon returned an error',
   network_error: 'Request failed',
   unrecognized: "Response wasn't a Vine page"
@@ -74,6 +86,8 @@ async function render() {
       const newItems = computeNewItems(result, seen);
       return { search: s, result, newItems };
     });
+
+  currentSettings = settings;
 
   const cmp = SORTERS[settings.sortBy] || SORTERS.count;
   const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
@@ -166,6 +180,65 @@ function renderHeader(searches, run) {
   if (msg) banner.textContent = msg;
 }
 
+/**
+ * What a truncated search says for itself. On the page it also offers to pull the
+ * pages the sweep skipped; the popup only points at the setting, because it closes
+ * on focus loss and a page walk takes minutes.
+ */
+function renderTruncationNote(search, result) {
+  const note = document.createElement('div');
+  note.className = 'row-actions';
+  note.style.color = 'var(--muted)';
+  note.style.fontSize = '11.5px';
+
+  const pending = pageFetchNote.get(search.id);
+  if (pending) {
+    note.textContent = pending;
+    return note;
+  }
+
+  const checked = result.lastPage
+    ? `Only the first ${result.pagesFetched} of ${result.lastPage} pages were checked`
+    : `Only the first ${result.pagesFetched} page(s) were checked`;
+
+  const text = document.createElement('span');
+  text.textContent =
+    mode === 'page' ? `${checked}.` : `${checked} — raise "Pages per search" in Options to see the rest.`;
+  note.append(text);
+
+  if (mode !== 'page') return note;
+
+  // One click takes the same bite the sweep does, so a 20-page search stays a series
+  // of decisions. The row keeps saying "truncated" until the pages run out.
+  const remaining = result.lastPage ? result.lastPage - result.pagesFetched : 0;
+  const batch = remaining ? Math.min(remaining, Math.max(1, currentSettings.maxPages || 1)) : 0;
+  const more = document.createElement('button');
+  more.textContent = batch ? `Fetch ${batch} more page${batch === 1 ? '' : 's'}` : 'Fetch more pages';
+  more.addEventListener('click', async () => {
+    more.disabled = true;
+    const res = await chrome.runtime.sendMessage({ type: 'VC_FETCH_MORE', searchId: search.id });
+    if (res && res.started) {
+      pageFetchNote.set(search.id, 'Fetching…');
+      render();
+    } else {
+      flashNote(search.id, (res && FETCH_MORE_REFUSED[res.reason]) || 'Could not start.');
+    }
+  });
+  note.append(more);
+
+  return note;
+}
+
+/** Show a one-off line on the row, then let the row go back to what it was saying. */
+function flashNote(searchId, text) {
+  pageFetchNote.set(searchId, text);
+  render();
+  setTimeout(() => {
+    pageFetchNote.delete(searchId);
+    render();
+  }, 5000);
+}
+
 function renderRow({ search, result, newItems }) {
   const row = document.createElement('div');
   row.className = 'row';
@@ -236,14 +309,16 @@ function renderRow({ search, result, newItems }) {
   }
   row.append(actions);
 
-  if (result && result.truncated) {
-    const note = document.createElement('div');
-    note.className = 'row-actions';
-    note.style.color = 'var(--muted)';
-    note.style.fontSize = '11.5px';
-    note.textContent = `Only the first ${result.pagesFetched} page(s) were checked — raise "Pages per search" in Options to see the rest.`;
-    row.append(note);
+  if (result && result.retained) {
+    const kept = document.createElement('div');
+    kept.className = 'row-actions';
+    kept.style.color = 'var(--muted)';
+    kept.style.fontSize = '11.5px';
+    kept.textContent = `Includes ${result.retained} item(s) kept from pages past this sweep's reach.`;
+    row.append(kept);
   }
+
+  if (result && result.truncated) row.append(renderTruncationNote(search, result));
 
   if (newItems.length) {
     const grid = document.createElement('div');
@@ -294,7 +369,11 @@ export function initView(viewMode) {
   $('run').addEventListener('click', async () => {
     const res = await chrome.runtime.sendMessage({ type: 'VC_START' });
     if (res && !res.started && res.reason === 'no_searches') chrome.runtime.openOptionsPage();
-    render();
+    await render();
+    // Otherwise the button just does nothing and the reason is invisible.
+    if (res && !res.started && res.reason === 'fetching_more') {
+      $('status').textContent = 'Fetching extra pages for one search — try again in a moment.';
+    }
   });
 
   $('stop').addEventListener('click', async () => {
@@ -328,7 +407,18 @@ export function initView(viewMode) {
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && (msg.type === 'VC_PROGRESS' || msg.type === 'VC_DONE')) render();
+    if (!msg) return;
+
+    if (msg.type === 'VC_PROGRESS' || msg.type === 'VC_DONE') {
+      render();
+    } else if (msg.type === 'VC_MORE_PROGRESS') {
+      pageFetchNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
+      render();
+    } else if (msg.type === 'VC_MORE_DONE') {
+      pageFetchNote.delete(msg.searchId);
+      if (msg.status === 'ok') render();
+      else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
+    }
   });
 
   // A page left open outlives an Options edit, so pick sort/hide changes up live.

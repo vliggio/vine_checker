@@ -19,7 +19,8 @@ export const DEFAULT_SETTINGS = {
   maxPages: 2,
   reuseExistingTab: true,
   sortBy: 'count',
-  hideSeen: false
+  hideSeen: false,
+  keepExtraDays: 14
 };
 
 const SEEN_HIGH_WATER = 60000;

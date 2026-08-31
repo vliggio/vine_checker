@@ -56,8 +56,8 @@ carries the session cookie regardless of SameSite rules; and MV3 service workers
 
 ### Module system split
 
-- ES modules: `src/background.js`, `src/storage.js`, `src/urls.js`, `src/view.js`, `popup.js`,
-  `results.js`, `options.js`
+- ES modules: `src/background.js`, `src/storage.js`, `src/urls.js`, `src/results.js`,
+  `src/view.js`, `popup.js`, `results.js`, `options.js`
 - Classic scripts: `src/parse.js`, `src/collector.js`
 
 `parse.js` and `collector.js` must stay classic because `chrome.scripting.executeScript({files})`
@@ -104,6 +104,29 @@ A 150-search sweep runs ~10–15 minutes, far longer than an MV3 worker's idle l
 - `stopRun` only flips `running: false` when a pump is active — the pump notices and calls
   `finishRun` itself, so the collector tab is never torn down under an in-flight fetch
 
+### On-demand paging
+
+`startFetchMore()` pulls the pages a sweep skipped for one search (results page only —
+the popup dies on focus loss). One click takes `maxPages` more, the same bite the sweep
+takes; the row stays truncated until the pages run out, so it is clicked again rather
+than committing to a twenty-page wait. It shares the sweep's machinery deliberately:
+same `collect()`, same `throttle()`, same rate-limit back-off. Two constraints fall out
+of that sharing:
+
+- it refuses while `runState.running`, and `startRun` refuses while it is going — they
+  would otherwise fight over the collector tab and the same rate limit
+- the merged result is persisted after *every* page, because the in-memory loop dies
+  with the worker and only what reached storage survives
+
+**Deep items outlive the sweep that cannot see them.** Anything fetched past `maxPages`
+is stamped `deep`/`deepTs`, and `mergeRetainedItems()` (`src/results.js`, pure) carries
+those items into each new sweep result. Without that they would vanish on the next run
+and return as "new" the next time relevance floated them back into range. A stamped item
+is dropped once it has gone `settings.keepExtraDays` without being seen again, and loses
+its stamp entirely as soon as a sweep returns it — that is what counts as confirmation.
+
+Items it pulls land in `results` only. Acknowledgement is still the user's move.
+
 **Abort semantics:** `signin_required`, `captcha` and `rate_limited` abort the entire
 sweep. Any other error marks that one search and the sweep continues. This distinction is
 deliberate — 150 doomed requests against a signed-out session is the failure mode being
@@ -111,9 +134,13 @@ prevented.
 
 ### Messages
 
-Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_SELFTEST`,
-`VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI broadcasts: `VC_PROGRESS`,
-`VC_DONE`. Worker → collector: `VC_FETCH`.
+Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_FETCH_MORE`,
+`VC_SELFTEST`, `VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI broadcasts:
+`VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`. Worker → collector:
+`VC_FETCH`.
+
+`VC_FETCH_MORE` answers immediately with `{started}` and reports the rest by
+broadcast — the walk takes minutes and a message port does not stay open that long.
 
 ## Vine page facts (confirmed against live pages, Aug 2026)
 

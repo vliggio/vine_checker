@@ -140,6 +140,7 @@ const SETTING_FIELDS = {
   notify: 'checkbox',
   delayMs: 'number',
   maxPages: 'number',
+  keepExtraDays: 'number',
   reuseExistingTab: 'checkbox',
   sortBy: 'select',
   hideSeen: 'checkbox'
