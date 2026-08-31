@@ -70,10 +70,16 @@ thumbnails per row. It picks up sweep progress live, and reuses an already-open 
 tab instead of stacking duplicates.
 
 **Searches with more pages than you swept.** A search whose results ran past *Pages per
-search* says so when expanded, and in the tab view offers to fetch the rest right there
-— one search, at the same delay a sweep uses, without re-running all 150 at a higher
-page count. It refuses while a sweep is running, since both go through the same tab and
-the same rate limit.
+search* says so when expanded, and in the tab view offers to fetch more right there —
+one search, at the same delay a sweep uses, without re-running all 150 at a higher page
+count. Each click pulls another *Pages per search* worth, so a long search is a series
+of decisions rather than one long wait, and it refuses while a sweep is running, since
+both go through the same tab and the same rate limit.
+
+Items pulled this way stick around: later sweeps only reach the first pages, so without
+that they would disappear and come back as *new* whenever Vine's relevance ordering
+floated them into range. They are dropped once they have gone *Keep extra pages for*
+days without turning up again.
 
 **New means never acknowledged.** An item counts as new until you acknowledge it — by
 hitting *Open search*, *Mark seen* on a row, or *Mark all seen*. Repeated sweeps will not
@@ -90,6 +96,7 @@ newly appear.
 | --- | --- | --- |
 | Delay between requests | 1500 ms | Randomised up to 2×. Raise it if Amazon starts rate-limiting. |
 | Pages per search | 2 | Vine returns 36 items per page. Vine search results are relevance-ordered, not date-ordered, so a new item in a large result set can sit past page 2 — raise this if your searches return hundreds of items. |
+| Keep extra pages for | 14 days | How long an item pulled from beyond *Pages per search* survives without being seen again. |
 | Reuse an open amazon.com tab | on | Off means a background tab is opened for the sweep and closed after. |
 | Sort searches by | Item count | Or by title (A–Z). Applied within each group, so searches with new items still come first either way. |
 | Hide a search once marked seen | off | On, an acknowledged search leaves the list instead of dropping to the bottom; it is counted in the footer. Errors are never hidden. |

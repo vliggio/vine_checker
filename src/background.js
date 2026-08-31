@@ -20,6 +20,7 @@ import {
   countNewTotal
 } from './storage.js';
 import { withPage } from './urls.js';
+import { markDeep, mergeRetainedItems, expireRetainedItems } from './results.js';
 
 const AUTO_ALARM = 'vc-autocheck';
 const KEEPALIVE_ALARM = 'vc-keepalive';
@@ -226,6 +227,10 @@ async function checkSearch(search, settings) {
  * by relevance rather than date, so the new item you want is exactly the one sitting
  * past the cut.
  *
+ * One click pulls at most `maxPages` more — the same bite the sweep takes — so a
+ * search with twenty pages stays a series of decisions rather than one long wait.
+ * The row stays truncated until the pages run out, so clicking again continues.
+ *
  * Returns as soon as the walk starts; progress arrives as VC_MORE_PROGRESS and the
  * outcome as VC_MORE_DONE, because the walk can take minutes and a message port
  * cannot be held open that long.
@@ -258,17 +263,21 @@ async function startFetchMore(searchId) {
 
 async function runFetchMore(search, result) {
   const settings = await getSettings();
-  const byAsin = new Set((result.items || []).map((i) => i.asin));
-  const items = [...(result.items || [])];
+  const now = Date.now();
+  const keepMs = retentionMs(settings);
+  const byAsin = new Map(
+    expireRetainedItems(result.items || [], { now, keepMs }).map((item) => [item.asin, item])
+  );
   let fetchedThrough = Math.max(1, result.pagesFetched || 1);
   // Results written before lastPage was recorded do not know where the end is. Ask for
   // one more page; the response says how far it actually goes.
   let lastPage = result.lastPage || fetchedThrough + 1;
+  const stopAt = fetchedThrough + Math.max(1, settings.maxPages);
   let degraded = !!result.degraded;
   let status = 'ok';
 
   try {
-    for (let page = fetchedThrough + 1; page <= lastPage; page += 1) {
+    for (let page = fetchedThrough + 1; page <= Math.min(lastPage, stopAt); page += 1) {
       broadcast({ type: 'VC_MORE_PROGRESS', searchId: search.id, page, lastPage });
 
       const url = withPage(search.url, page);
@@ -289,9 +298,9 @@ async function runFetchMore(search, result) {
       lastPage = res.lastPage || lastPage;
       degraded = degraded || !!res.degraded;
       for (const item of res.items) {
-        if (byAsin.has(item.asin)) continue;
-        byAsin.add(item.asin);
-        items.push(item);
+        // Deep items are the ones a sweep will not see again, so they carry the stamp
+        // that keeps them alive across sweeps. Re-fetching one resets its clock.
+        byAsin.set(item.asin, page > Math.max(1, settings.maxPages) ? markDeep(item, Date.now()) : item);
       }
       fetchedThrough = page;
       // An empty page is the end of the results, whatever the pagination claimed.
@@ -301,7 +310,7 @@ async function runFetchMore(search, result) {
       // for. Items land in `results` only — acknowledgement stays the user's move.
       await updateResult(search.id, {
         ...result,
-        items,
+        items: [...byAsin.values()],
         degraded,
         lastPage,
         pagesFetched: fetchedThrough,
@@ -310,7 +319,7 @@ async function runFetchMore(search, result) {
       await refreshBadge();
 
       if (!res.items.length) break;
-      if (page < lastPage) await throttle(settings);
+      if (page < Math.min(lastPage, stopAt)) await throttle(settings);
     }
   } catch (err) {
     status = 'error';
@@ -325,6 +334,11 @@ async function runFetchMore(search, result) {
     lastPage,
     newTotal: await countNewTotal()
   });
+}
+
+/** How long an unconfirmed deep item survives, in ms. */
+function retentionMs(settings) {
+  return Math.max(1, settings.keepExtraDays) * 24 * 60 * 60 * 1000;
 }
 
 function throttle(settings) {
@@ -407,8 +421,16 @@ async function pump() {
         break;
       }
 
-      const fresh = await countFreshlyAppeared(search.id, outcome.result);
-      await updateResult(search.id, outcome.result);
+      // A sweep only reaches maxPages, so deep items would drop out of the results and
+      // come back as "new" the next time relevance floated them into range.
+      const previous = (await getResults())[search.id];
+      const merged = mergeRetainedItems(previous, outcome.result, {
+        now: Date.now(),
+        keepMs: retentionMs(settings)
+      });
+
+      const fresh = await countFreshlyAppeared(search.id, merged);
+      await updateResult(search.id, merged);
 
       const next = await getRunState();
       await setRunState({

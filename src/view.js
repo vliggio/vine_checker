@@ -19,6 +19,9 @@ let visibleIds = [];
 /** searchId -> the line shown in place of the truncation note while pages are pulled. */
 const pageFetchNote = new Map();
 
+/** Last settings read by render(), for the row builders that need one or two of them. */
+let currentSettings = {};
+
 const FETCH_MORE_REFUSED = {
   sweep_running: 'Wait for the sweep to finish.',
   already_fetching: 'Already fetching pages for another search.',
@@ -83,6 +86,8 @@ async function render() {
       const newItems = computeNewItems(result, seen);
       return { search: s, result, newItems };
     });
+
+  currentSettings = settings;
 
   const cmp = SORTERS[settings.sortBy] || SORTERS.count;
   const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
@@ -203,11 +208,12 @@ function renderTruncationNote(search, result) {
 
   if (mode !== 'page') return note;
 
+  // One click takes the same bite the sweep does, so a 20-page search stays a series
+  // of decisions. The row keeps saying "truncated" until the pages run out.
   const remaining = result.lastPage ? result.lastPage - result.pagesFetched : 0;
+  const batch = remaining ? Math.min(remaining, Math.max(1, currentSettings.maxPages || 1)) : 0;
   const more = document.createElement('button');
-  more.textContent = remaining
-    ? `Fetch ${remaining} more page${remaining === 1 ? '' : 's'}`
-    : 'Fetch the rest';
+  more.textContent = batch ? `Fetch ${batch} more page${batch === 1 ? '' : 's'}` : 'Fetch more pages';
   more.addEventListener('click', async () => {
     more.disabled = true;
     const res = await chrome.runtime.sendMessage({ type: 'VC_FETCH_MORE', searchId: search.id });
@@ -302,6 +308,15 @@ function renderRow({ search, result, newItems }) {
     actions.append(ack);
   }
   row.append(actions);
+
+  if (result && result.retained) {
+    const kept = document.createElement('div');
+    kept.className = 'row-actions';
+    kept.style.color = 'var(--muted)';
+    kept.style.fontSize = '11.5px';
+    kept.textContent = `Includes ${result.retained} item(s) kept from pages past this sweep's reach.`;
+    row.append(kept);
+  }
 
   if (result && result.truncated) row.append(renderTruncationNote(search, result));
 

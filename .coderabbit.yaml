@@ -86,10 +86,11 @@ reviews:
           and the sweep continues. Flag changes that blur the two.
         - On-demand paging (`startFetchMore`) shares the sweep's `collect`, `throttle`
           and back-off on purpose, and each side refuses while the other is running:
-          they contend for the collector tab and the same rate limit. It persists the
-          merged result after every page, because its loop is in-memory and dies with
-          the worker. Flag anything that lets the two run at once, skips the delay, or
-          batches the writes to the end.
+          they contend for the collector tab and the same rate limit. One click pulls at
+          most `maxPages`. It persists the merged result after every page, because its
+          loop is in-memory and dies with the worker. Flag anything that lets the two run
+          at once, skips the delay, unbounds the per-click page count, or batches the
+          writes to the end.
         - `finishRun` must stay idempotent — both `stopRun` and `pump` can reach it.
           `stopRun` only flips `running: false` while a pump is active, so the pump
           tears the tab down itself and never does so under an in-flight fetch.
@@ -143,6 +144,19 @@ reviews:
         `www.amazon.com` only. Widening to another marketplace also needs
         `manifest.json` host permissions and `isVineUrl()` updated — flag one without
         the other. Anything added here is pure and should come with a unit test.
+
+    - path: "src/results.js"
+      instructions: |-
+        Pure helpers over a stored SearchResult, kept out of `storage.js` so they can be
+        unit-tested without chrome APIs. Anything added here stays pure and comes with a
+        test.
+
+        Items fetched past `maxPages` carry `deep`/`deepTs` and are carried across
+        sweeps, because a sweep cannot see them and they would otherwise return as "new"
+        each time relevance moved them. Retention is bounded by `keepExtraDays`; a
+        confirmed item loses its stamp. Flag anything that keeps deep items forever, or
+        that lets this path write to `seen` — retained items are results, not
+        acknowledgements.
 
     - path: "**/{popup,results,view,options}.{js,html,css}"
       instructions: |-
