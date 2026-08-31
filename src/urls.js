@@ -16,11 +16,18 @@ export function withPage(url, page) {
 export function labelFromUrl(url) {
   try {
     const u = new URL(url);
+    // Sweeps search all of Vine, so naming the queue distinguishes nothing and just
+    // pushes the part that identifies the search off the end of a narrow row.
     const search = u.searchParams.get('search');
-    const queue = u.searchParams.get('queue') || 'vine';
-    if (search) return `${search} (${queue})`;
+    if (search) return search;
+
+    // Only a URL with no search term at all needs something else to go by.
+    const queue = u.searchParams.get('queue');
     const node = u.searchParams.get('cn') || u.searchParams.get('pn');
-    return node ? `${queue} / node ${node}` : queue;
+    if (queue && node) return `${queue} / node ${node}`;
+    if (queue) return queue;
+    if (node) return `node ${node}`;
+    return u.pathname.split('/').filter(Boolean).pop().replace(/-/g, ' ') || url;
   } catch (e) {
     return url;
   }

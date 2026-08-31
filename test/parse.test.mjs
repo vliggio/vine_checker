@@ -52,10 +52,14 @@ test('withPage uses the `page` param and omits it for page 1', () => {
   assert.equal(withPage(`${VINE}&page=5`, 1), VINE);
 });
 
-test('labelFromUrl prefers the search term', () => {
-  assert.equal(labelFromUrl(VINE), 'keyboard (potluck)');
+test('labelFromUrl is the search term, with no queue suffix', () => {
+  assert.equal(labelFromUrl(VINE), 'keyboard');
+  assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items?search=wool+socks'), 'wool socks');
   assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items?queue=encore'), 'encore');
   assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items?queue=encore&cn=123'), 'encore / node 123');
+  assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items?cn=123'), 'node 123');
+  assert.equal(labelFromUrl('https://www.amazon.com/vine/vine-items'), 'vine items');
+  assert.equal(labelFromUrl('not a url'), 'not a url');
 });
 
 test('isVineUrl only accepts https vine pages on www.amazon.com', () => {
@@ -80,7 +84,7 @@ test('parseImportText handles tab, comma and bare-URL lines', () => {
 
   assert.deepEqual(
     entries.map((e) => e.label),
-    ['Keyboards', 'Lamps, bright', 'keyboard (potluck)']
+    ['Keyboards', 'Lamps, bright', 'keyboard']
   );
   assert.deepEqual(invalid, ['https://example.com/not-vine']);
 });
