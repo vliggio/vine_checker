@@ -28,13 +28,13 @@ const COLLECTOR_URL = 'https://www.amazon.com/vine/vine-items';
 
 /** Transient, per-service-worker-lifetime state. Everything durable lives in storage. */
 let pumping = false;
-/** Search id whose skipped pages are being pulled on demand, or null. */
-let fetchingMore = null;
+/** Search id of the single-search job holding the collector (extra pages, or a recheck). */
+let soloJob = null;
 /**
- * Claim on the collector, taken synchronously before either entry point awaits.
+ * Claim on the collector, taken synchronously before any entry point awaits.
  *
- * Both of them read storage before they record anything, so two clicks landing in the
- * same tick would each pass their guard and start fetching in parallel — exactly the
+ * They all read storage before they record anything, so two clicks landing in the same
+ * tick would each pass their guard and start fetching in parallel — exactly the
  * concurrency this extension is built to avoid.
  */
 let claimingCollector = false;
@@ -244,7 +244,7 @@ async function checkSearch(search, settings) {
  * cannot be held open that long.
  */
 async function startFetchMore(searchId) {
-  if (fetchingMore) return { started: false, reason: 'already_fetching' };
+  if (soloJob) return { started: false, reason: 'already_fetching' };
   if (claimingCollector) return { started: false, reason: 'sweep_running' };
   claimingCollector = true;
 
@@ -259,13 +259,13 @@ async function startFetchMore(searchId) {
       return { started: false, reason: 'nothing_to_fetch' };
     }
 
-    fetchingMore = searchId;
+    soloJob = searchId;
     // Same keepalive a sweep uses: at the configured delay this outlives the worker's
     // idle timeout long before it runs out of pages.
     await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
 
     runFetchMore(search, result).finally(async () => {
-      fetchingMore = null;
+      soloJob = null;
       await chrome.alarms.clear(KEEPALIVE_ALARM);
       await releaseCollectorTab();
     });
@@ -351,6 +351,67 @@ async function runFetchMore(search, result) {
   });
 }
 
+/**
+ * Re-check one search, without the 10-15 minutes a full sweep costs.
+ *
+ * Deliberately silent: no desktop notification, because the user is looking at the row
+ * they just asked about. The badge is still refreshed — it is the unacknowledged count,
+ * not an announcement, and would otherwise be wrong.
+ */
+async function startRecheck(searchId) {
+  if (soloJob) return { started: false, reason: 'already_fetching' };
+  if (claimingCollector) return { started: false, reason: 'sweep_running' };
+  claimingCollector = true;
+
+  try {
+    const state = await getRunState();
+    if (state.running) return { started: false, reason: 'sweep_running' };
+
+    const search = (await getSearches()).find((s) => s.id === searchId);
+    if (!search) return { started: false, reason: 'nothing_to_fetch' };
+
+    soloJob = searchId;
+    await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+
+    runRecheck(search).finally(async () => {
+      soloJob = null;
+      await chrome.alarms.clear(KEEPALIVE_ALARM);
+      await releaseCollectorTab();
+    });
+
+    return { started: true };
+  } finally {
+    claimingCollector = false;
+  }
+}
+
+async function runRecheck(search) {
+  const settings = await getSettings();
+  let status = 'ok';
+
+  try {
+    const outcome = await checkSearch(search, settings);
+    if (outcome.abort) {
+      // Signed out, CAPTCHA or throttled: nothing to store, and the row must say why.
+      status = outcome.abort;
+    } else {
+      // Same merge the sweep does, so pulled-in deep pages are not thrown away. A
+      // per-search failure is stored as the result; the row renders it as an error.
+      const previous = (await getResults())[search.id];
+      await updateResult(
+        search.id,
+        mergeRetainedItems(previous, outcome.result, { now: Date.now(), keepMs: retentionMs(settings) })
+      );
+      await refreshBadge();
+    }
+  } catch (err) {
+    status = 'error';
+    console.error('[vine-checker] recheck failed', err);
+  }
+
+  broadcast({ type: 'VC_RECHECK_DONE', searchId: search.id, status, newTotal: await countNewTotal() });
+}
+
 /** How long an unconfirmed deep item survives, in ms. */
 function retentionMs(settings) {
   return Math.max(1, settings.keepExtraDays) * 24 * 60 * 60 * 1000;
@@ -363,7 +424,7 @@ function throttle(settings) {
 
 export async function startRun({ manual = true } = {}) {
   // They share the collector tab and the same rate limit.
-  if (fetchingMore) return { started: false, reason: 'fetching_more' };
+  if (soloJob) return { started: false, reason: 'fetching_more' };
   if (claimingCollector) return { started: false, reason: 'already_running' };
   claimingCollector = true;
 
@@ -618,6 +679,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+
+      case 'VC_RECHECK':
+        sendResponse(await startRecheck(msg.searchId));
+        break;
 
       case 'VC_FETCH_MORE':
         sendResponse(await startFetchMore(msg.searchId));

@@ -16,8 +16,8 @@ let mode = 'popup';
 /** Ids of the rows currently drawn, so "Expand all" knows what it is acting on. */
 let visibleIds = [];
 
-/** searchId -> the line shown in place of the truncation note while pages are pulled. */
-const pageFetchNote = new Map();
+/** searchId -> a line the row shows instead of its usual note, while a job runs. */
+const rowNote = new Map();
 
 /** Last settings read by render(), for the row builders that need one or two of them. */
 let currentSettings = {};
@@ -49,9 +49,9 @@ function stopWatchingFetch(searchId) {
   pageFetchWatchdogs.delete(searchId);
 }
 
-const FETCH_MORE_REFUSED = {
+const REFUSED = {
   sweep_running: 'Wait for the sweep to finish.',
-  already_fetching: 'Already fetching pages for another search.',
+  already_fetching: 'Busy with another search.',
   nothing_to_fetch: 'Nothing left to fetch.'
 };
 
@@ -207,22 +207,23 @@ function renderHeader(searches, run) {
   if (msg) banner.textContent = msg;
 }
 
+/** The small muted line a row uses for status and footnotes. */
+function mutedLine(text) {
+  const line = document.createElement('div');
+  line.className = 'row-actions';
+  line.style.color = 'var(--muted)';
+  line.style.fontSize = '11.5px';
+  if (text) line.textContent = text;
+  return line;
+}
+
 /**
  * What a truncated search says for itself. On the page it also offers to pull the
  * pages the sweep skipped; the popup only points at the setting, because it closes
  * on focus loss and a page walk takes minutes.
  */
 function renderTruncationNote(search, result) {
-  const note = document.createElement('div');
-  note.className = 'row-actions';
-  note.style.color = 'var(--muted)';
-  note.style.fontSize = '11.5px';
-
-  const pending = pageFetchNote.get(search.id);
-  if (pending) {
-    note.textContent = pending;
-    return note;
-  }
+  const note = mutedLine();
 
   const checked = result.lastPage
     ? `Only the first ${result.pagesFetched} of ${result.lastPage} pages were checked`
@@ -245,11 +246,11 @@ function renderTruncationNote(search, result) {
     more.disabled = true;
     const res = await chrome.runtime.sendMessage({ type: 'VC_FETCH_MORE', searchId: search.id });
     if (res && res.started) {
-      pageFetchNote.set(search.id, 'Fetching…');
+      rowNote.set(search.id, 'Fetching…');
       watchFetch(search.id);
       render();
     } else {
-      flashNote(search.id, (res && FETCH_MORE_REFUSED[res.reason]) || 'Could not start.');
+      flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
     }
   });
   note.append(more);
@@ -260,10 +261,10 @@ function renderTruncationNote(search, result) {
 /** Show a one-off line on the row, then let the row go back to what it was saying. */
 function flashNote(searchId, text) {
   stopWatchingFetch(searchId);
-  pageFetchNote.set(searchId, text);
+  rowNote.set(searchId, text);
   render();
   setTimeout(() => {
-    pageFetchNote.delete(searchId);
+    rowNote.delete(searchId);
     render();
   }, 5000);
 }
@@ -324,6 +325,26 @@ function renderRow({ search, result, newItems }) {
   });
   actions.append(open);
 
+  // Page-only, like the page walk: a re-check is quick, but the popup still dies on
+  // focus loss and would leave the request reporting into nothing.
+  if (mode === 'page') {
+    const refresh = document.createElement('button');
+    refresh.textContent = 'Refresh';
+    refresh.title = 'Check this search again now';
+    refresh.addEventListener('click', async () => {
+      refresh.disabled = true;
+      const res = await chrome.runtime.sendMessage({ type: 'VC_RECHECK', searchId: search.id });
+      if (res && res.started) {
+        rowNote.set(search.id, 'Checking…');
+        watchFetch(search.id);
+        render();
+      } else {
+        flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
+      }
+    });
+    actions.append(refresh);
+  }
+
   if (newItems.length) {
     const ack = document.createElement('button');
     ack.textContent = 'Mark seen';
@@ -339,15 +360,12 @@ function renderRow({ search, result, newItems }) {
   row.append(actions);
 
   if (result && result.retained) {
-    const kept = document.createElement('div');
-    kept.className = 'row-actions';
-    kept.style.color = 'var(--muted)';
-    kept.style.fontSize = '11.5px';
-    kept.textContent = `Includes ${result.retained} item(s) kept from pages past this sweep's reach.`;
-    row.append(kept);
+    row.append(mutedLine(`Includes ${result.retained} item(s) kept from pages past this sweep's reach.`));
   }
 
-  if (result && result.truncated) row.append(renderTruncationNote(search, result));
+  const note = rowNote.get(search.id);
+  if (note) row.append(mutedLine(note));
+  else if (result && result.truncated) row.append(renderTruncationNote(search, result));
 
   if (newItems.length) {
     const grid = document.createElement('div');
@@ -441,12 +459,19 @@ export function initView(viewMode) {
     if (msg.type === 'VC_PROGRESS' || msg.type === 'VC_DONE') {
       render();
     } else if (msg.type === 'VC_MORE_PROGRESS') {
-      pageFetchNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
+      rowNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
       watchFetch(msg.searchId);
       render();
+    } else if (msg.type === 'VC_RECHECK_DONE') {
+      stopWatchingFetch(msg.searchId);
+      rowNote.delete(msg.searchId);
+      // A per-search failure is stored on the result and renders as an error row; only
+      // an aborted check has nothing to show for itself.
+      if (msg.status === 'ok') render();
+      else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
     } else if (msg.type === 'VC_MORE_DONE') {
       stopWatchingFetch(msg.searchId);
-      pageFetchNote.delete(msg.searchId);
+      rowNote.delete(msg.searchId);
       if (msg.status === 'ok') render();
       else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
     }

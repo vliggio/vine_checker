@@ -104,16 +104,24 @@ A 150-search sweep runs ~10–15 minutes, far longer than an MV3 worker's idle l
 - `stopRun` only flips `running: false` when a pump is active — the pump notices and calls
   `finishRun` itself, so the collector tab is never torn down under an in-flight fetch
 
-### On-demand paging
+### Single-search jobs
 
-`startFetchMore()` pulls the pages a sweep skipped for one search (results page only —
-the popup dies on focus loss). One click takes `maxPages` more, the same bite the sweep
-takes; the row stays truncated until the pages run out, so it is clicked again rather
-than committing to a twenty-page wait. It shares the sweep's machinery deliberately:
-same `collect()`, same `throttle()`, same rate-limit back-off. Two constraints fall out
-of that sharing:
+Two of them, both results-page only because the popup dies on focus loss and would
+leave a request reporting into nothing: `startRecheck()` re-runs `checkSearch()` for one
+search, and `startFetchMore()` pulls the pages a sweep skipped for one search. Both take
+the `claimingCollector` claim and hold `soloJob` for their duration, so they cannot run
+together or alongside a sweep.
 
-- it refuses while `runState.running`, and `startRun` refuses while it is going — they
+A recheck stores its result through the same merge the pump uses and refreshes the
+badge, but never notifies: the user is looking at the row they asked about. It updates
+that result's own `lastRunTs`; the header's sweep timestamp is `runState`, untouched.
+
+`startFetchMore()` takes `maxPages` more per click, the same bite the sweep takes; the row
+stays truncated until the pages run out, so it is clicked again rather than committing
+to a twenty-page wait. Both share the sweep's machinery deliberately: same `collect()`,
+same `throttle()`, same rate-limit back-off. Two constraints fall out of that sharing:
+
+- they refuse while `runState.running`, and `startRun` refuses while one is going — they
   would otherwise fight over the collector tab and the same rate limit
 - the merged result is persisted after *every* page, because the in-memory loop dies
   with the worker and only what reached storage survives
@@ -135,12 +143,12 @@ prevented.
 ### Messages
 
 Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_FETCH_MORE`,
-`VC_SELFTEST`, `VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI broadcasts:
-`VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`. Worker → collector:
-`VC_FETCH`.
+`VC_RECHECK`, `VC_SELFTEST`, `VC_SETTINGS_CHANGED`, `VC_REFRESH_BADGE`. Worker → UI
+broadcasts: `VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`,
+`VC_RECHECK_DONE`. Worker → collector: `VC_FETCH`.
 
-`VC_FETCH_MORE` answers immediately with `{started}` and reports the rest by
-broadcast — the walk takes minutes and a message port does not stay open that long.
+`VC_FETCH_MORE` and `VC_RECHECK` answer immediately with `{started}` and report the
+rest by broadcast — the work takes longer than a message port stays open.
 
 ## Vine page facts (confirmed against live pages, Aug 2026)
 
