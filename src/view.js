@@ -13,6 +13,9 @@ const expanded = new Set();
 /** 'popup' | 'page' */
 let mode = 'popup';
 
+/** Ids of the rows currently drawn, so "Expand all" knows what it is acting on. */
+let visibleIds = [];
+
 // The popup is 460px wide; the page has room for a lot more before scrolling hurts.
 const ITEM_CAP = { popup: 24, page: 72 };
 
@@ -92,6 +95,8 @@ async function render() {
       chrome.runtime.openOptionsPage();
     });
     $('footer').textContent = '';
+    visibleIds = [];
+    renderExpandAll();
     return;
   }
 
@@ -100,6 +105,11 @@ async function render() {
   // that need attention are not buried under a tail of handled ones.
   const visible = settings.hideSeen ? [...withNew, ...errored] : [...withNew, ...errored, ...stocked];
   for (const row of visible) list.append(renderRow(row));
+
+  // Only rows on screen count: a hidden or filtered-out search must not leave the
+  // button claiming everything is expanded when nothing visible is.
+  visibleIds = visible.map((r) => r.search.id);
+  renderExpandAll();
 
   if (!visible.length) {
     const note = document.createElement('div');
@@ -118,6 +128,18 @@ async function render() {
   if (unchecked.length) parts.push(`${unchecked.length} not checked yet`);
   parts.push(`${rows.length} searches enabled`);
   $('footer').textContent = parts.join(' · ');
+}
+
+/** Page-only; the button is absent from the popup, which has no room for the result. */
+function renderExpandAll() {
+  const button = $('expand-all');
+  if (!button) return;
+  button.disabled = !visibleIds.length;
+  button.textContent = allVisibleExpanded() ? 'Collapse all' : 'Expand all';
+}
+
+function allVisibleExpanded() {
+  return visibleIds.length > 0 && visibleIds.every((id) => expanded.has(id));
 }
 
 function renderHeader(searches, run) {
@@ -236,6 +258,9 @@ function renderRow({ search, result, newItems }) {
         const img = document.createElement('img');
         img.src = item.img;
         img.alt = '';
+        // Expanding every row at once is now one click, so don't request hundreds of
+        // thumbnails from Amazon for rows the user has not scrolled to.
+        img.loading = 'lazy';
         a.append(img);
       }
       const span = document.createElement('span');
@@ -288,6 +313,19 @@ export function initView(viewMode) {
   // Popup-only: the page is already the page.
   const openPage = $('open-page');
   if (openPage) openPage.addEventListener('click', openResultsPage);
+
+  // Page-only: one click instead of a dozen when a sweep turns up a lot at once.
+  const expandAll = $('expand-all');
+  if (expandAll) {
+    expandAll.addEventListener('click', () => {
+      const collapsing = allVisibleExpanded();
+      for (const id of visibleIds) {
+        if (collapsing) expanded.delete(id);
+        else expanded.add(id);
+      }
+      render();
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && (msg.type === 'VC_PROGRESS' || msg.type === 'VC_DONE')) render();
