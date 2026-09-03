@@ -91,6 +91,11 @@ const SORTERS = {
   count: (a, b) =>
     b.newItems.length - a.newItems.length ||
     (b.result ? b.result.total : 0) - (a.result ? a.result.total : 0),
+  // Small result sets are the ones worth opening — a search with 3 items is scannable,
+  // one with 400 is not — so ascending order is a way to work, not just the inverse view.
+  countAsc: (a, b) =>
+    a.newItems.length - b.newItems.length ||
+    (a.result ? a.result.total : 0) - (b.result ? b.result.total : 0),
   title: (a, b) =>
     a.search.label.localeCompare(b.search.label, undefined, { numeric: true, sensitivity: 'base' })
 };
