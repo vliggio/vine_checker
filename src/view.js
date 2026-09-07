@@ -5,7 +5,15 @@
  * how much room they have and in whether opening a search should close the window.
  * `mode` captures that difference so there is one renderer, not two that drift.
  */
-import { getSearches, getResults, getSeen, getRunState, getSettings, computeNewItems } from './storage.js';
+import {
+  getSearches,
+  getResults,
+  getSeen,
+  getRunState,
+  getSettings,
+  setSettings,
+  computeNewItems
+} from './storage.js';
 
 const $ = (id) => document.getElementById(id);
 const expanded = new Set();
@@ -96,9 +104,43 @@ const SORTERS = {
   countAsc: (a, b) =>
     a.newItems.length - b.newItems.length ||
     (a.result ? a.result.total : 0) - (b.result ? b.result.total : 0),
-  title: (a, b) =>
-    a.search.label.localeCompare(b.search.label, undefined, { numeric: true, sensitivity: 'base' })
+  title: (a, b) => byLabel(a, b),
+  titleDesc: (a, b) => byLabel(b, a)
 };
+
+function byLabel(a, b) {
+  return a.search.label.localeCompare(b.search.label, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/**
+ * The page-only column headers, in click order: the first click on a column takes its
+ * natural direction, the second reverses it. Both directions are real `sortBy` values,
+ * so the headers write the same setting the Options select does — the choice survives a
+ * reload and the two surfaces can never disagree about what the list is sorted by.
+ */
+const SORT_COLUMNS = {
+  title: ['title', 'titleDesc'],
+  count: ['count', 'countAsc']
+};
+
+const SORT_ARROW = { title: '\u25b2', titleDesc: '\u25bc', count: '\u25bc', countAsc: '\u25b2' };
+
+/**
+ * The key the list is sorted by, seeded from settings on the first render and advanced
+ * synchronously on a header click. It is not read back out of `currentSettings`, because
+ * that only catches up once setSettings() resolves — a fast second click on one column
+ * has to reverse it, not compute the same value from a key the write has not landed yet.
+ */
+let sortBy = null;
+
+/** Which column a stored sortBy belongs to, and how far through its cycle it is. */
+function sortState(sortBy) {
+  for (const [column, keys] of Object.entries(SORT_COLUMNS)) {
+    const index = keys.indexOf(sortBy);
+    if (index !== -1) return { column, index };
+  }
+  return { column: 'count', index: 0 };
+}
 
 async function render() {
   const [searches, results, seen, run, settings] = await Promise.all([
@@ -110,6 +152,8 @@ async function render() {
   ]);
 
   renderHeader(searches, run);
+  if (sortBy === null) sortBy = settings.sortBy;
+  renderSortHeader();
 
   const rows = searches
     .filter((s) => s.enabled !== false)
@@ -121,7 +165,7 @@ async function render() {
 
   currentSettings = settings;
 
-  const cmp = SORTERS[settings.sortBy] || SORTERS.count;
+  const cmp = SORTERS[sortBy] || SORTERS.count;
   const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
   const errored = rows.filter((r) => r.result && r.result.status !== 'ok').sort(cmp);
   const stocked = rows
@@ -182,6 +226,20 @@ function renderExpandAll() {
   if (!button) return;
   button.disabled = !visibleIds.length;
   button.textContent = allVisibleExpanded() ? 'Collapse all' : 'Expand all';
+}
+
+/** Page-only, like the button above it: the popup has no room for a column header. */
+function renderSortHeader() {
+  const bar = $('sort-row');
+  if (!bar) return;
+  const active = sortState(sortBy);
+  for (const button of bar.querySelectorAll('[data-column]')) {
+    const on = button.dataset.column === active.column;
+    const key = SORT_COLUMNS[button.dataset.column][active.index];
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-sort', on ? (SORT_ARROW[key] === '\u25b2' ? 'ascending' : 'descending') : 'none');
+    button.querySelector('.arrow').textContent = on ? SORT_ARROW[key] : '';
+  }
 }
 
 function allVisibleExpanded() {
@@ -457,6 +515,21 @@ export function initView(viewMode) {
     });
   }
 
+  // Page-only: sorting from the list's own header, rather than a round trip to Options.
+  const sortRow = $('sort-row');
+  if (sortRow) {
+    sortRow.addEventListener('click', async (e) => {
+      const button = e.target.closest('[data-column]');
+      if (!button) return;
+      const column = button.dataset.column;
+      const active = sortState(sortBy);
+      const keys = SORT_COLUMNS[column];
+      sortBy = active.column === column ? keys[(active.index + 1) % keys.length] : keys[0];
+      render();
+      await setSettings({ sortBy });
+    });
+  }
+
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg) return;
 
@@ -487,7 +560,10 @@ export function initView(viewMode) {
 
   // A page left open outlives an Options edit, so pick sort/hide changes up live.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.settings) render();
+    if (area !== 'local' || !changes.settings) return;
+    // Re-seed from whatever was stored, whether Options wrote it or a header click did.
+    sortBy = null;
+    render();
   });
 
   render();
