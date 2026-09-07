@@ -3,9 +3,11 @@ body { min-height: 100vh; }
 
 header { padding: 12px 16px 10px; }
 header .head-row,
+header .sort-row,
 main,
 footer { max-width: 1100px; margin-inline: auto; width: 100%; box-sizing: border-box; }
 
+header .sort-row { padding-inline: 16px; }
 main { padding: 12px 16px; }
 footer { padding: 9px 16px; }
 
