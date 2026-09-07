@@ -125,6 +125,14 @@ const SORT_COLUMNS = {
 
 const SORT_ARROW = { title: '\u25b2', titleDesc: '\u25bc', count: '\u25bc', countAsc: '\u25b2' };
 
+/**
+ * The key the list is sorted by, seeded from settings on the first render and advanced
+ * synchronously on a header click. It is not read back out of `currentSettings`, because
+ * that only catches up once setSettings() resolves — a fast second click on one column
+ * has to reverse it, not compute the same value from a key the write has not landed yet.
+ */
+let sortBy = null;
+
 /** Which column a stored sortBy belongs to, and how far through its cycle it is. */
 function sortState(sortBy) {
   for (const [column, keys] of Object.entries(SORT_COLUMNS)) {
@@ -144,7 +152,8 @@ async function render() {
   ]);
 
   renderHeader(searches, run);
-  renderSortHeader(settings);
+  if (sortBy === null) sortBy = settings.sortBy;
+  renderSortHeader();
 
   const rows = searches
     .filter((s) => s.enabled !== false)
@@ -156,7 +165,7 @@ async function render() {
 
   currentSettings = settings;
 
-  const cmp = SORTERS[settings.sortBy] || SORTERS.count;
+  const cmp = SORTERS[sortBy] || SORTERS.count;
   const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
   const errored = rows.filter((r) => r.result && r.result.status !== 'ok').sort(cmp);
   const stocked = rows
@@ -220,10 +229,10 @@ function renderExpandAll() {
 }
 
 /** Page-only, like the button above it: the popup has no room for a column header. */
-function renderSortHeader(settings) {
+function renderSortHeader() {
   const bar = $('sort-row');
   if (!bar) return;
-  const active = sortState(settings.sortBy);
+  const active = sortState(sortBy);
   for (const button of bar.querySelectorAll('[data-column]')) {
     const on = button.dataset.column === active.column;
     const key = SORT_COLUMNS[button.dataset.column][active.index];
@@ -513,11 +522,11 @@ export function initView(viewMode) {
       const button = e.target.closest('[data-column]');
       if (!button) return;
       const column = button.dataset.column;
-      const active = sortState(currentSettings.sortBy);
+      const active = sortState(sortBy);
       const keys = SORT_COLUMNS[column];
-      const next = active.column === column ? keys[(active.index + 1) % keys.length] : keys[0];
-      currentSettings = await setSettings({ sortBy: next });
+      sortBy = active.column === column ? keys[(active.index + 1) % keys.length] : keys[0];
       render();
+      await setSettings({ sortBy });
     });
   }
 
@@ -551,7 +560,10 @@ export function initView(viewMode) {
 
   // A page left open outlives an Options edit, so pick sort/hide changes up live.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.settings) render();
+    if (area !== 'local' || !changes.settings) return;
+    // Re-seed from whatever was stored, whether Options wrote it or a header click did.
+    sortBy = null;
+    render();
   });
 
   render();

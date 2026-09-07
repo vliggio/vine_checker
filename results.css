@@ -3,11 +3,17 @@ body { min-height: 100vh; }
 
 header { padding: 12px 16px 10px; }
 header .head-row,
-header .sort-row,
 main,
 footer { max-width: 1100px; margin-inline: auto; width: 100%; box-sizing: border-box; }
 
-header .sort-row { padding-inline: 16px; }
+/*
+ * The sort row lines up with the rows in `main`, not with the buttons above it. main's
+ * 1100px box holds its own 16px padding, while header supplies that padding to its
+ * children — so the row takes no inset of its own and is 32px narrower instead. That
+ * lands its edges on the rows' edges at any width; adding a second 16px would push it
+ * clear of them as soon as the viewport is too narrow for the 1100px box.
+ */
+header .sort-row { max-width: 1068px; margin-inline: auto; width: 100%; box-sizing: border-box; }
 main { padding: 12px 16px; }
 footer { padding: 9px 16px; }
 
