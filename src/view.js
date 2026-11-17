@@ -12,6 +12,7 @@ import {
   getRunState,
   getSettings,
   setSettings,
+  getSoloJob,
   computeNewItems
 } from './storage.js';
 
@@ -24,38 +25,38 @@ let mode = 'popup';
 /** Ids of the rows currently drawn, so "Expand all" knows what it is acting on. */
 let visibleIds = [];
 
-/** searchId -> a line the row shows instead of its usual note, while a job runs. */
+/** searchId -> a one-off line the row shows for a few seconds; see flashNote(). */
 const rowNote = new Map();
+
+/**
+ * The single-search job in flight, as the worker recorded it, or null.
+ *
+ * Read from storage on every render rather than tracked from the messages that
+ * announce it: a page opened or reloaded mid-job has heard none of those, and used to
+ * offer buttons that could only be refused.
+ */
+let currentJob = null;
 
 /** Last settings read by render(), for the row builders that need one or two of them. */
 let currentSettings = {};
 
-/** searchId -> timer that stops the row claiming a walk is still going. */
-const pageFetchWatchdogs = new Map();
+/** What the row of the search being worked on says while the job runs. */
+function jobNote(job) {
+  if (job.kind === 'more') {
+    return job.page ? `Fetching page ${job.page} of ${job.lastPage}…` : 'Fetching…';
+  }
+  return job.page ? `Checking page ${job.page}…` : 'Checking…';
+}
 
 /**
- * A page can legitimately take over a minute: the rate-limit back-off alone sleeps
- * 5s, 15s and 45s before giving up. Past that, silence means the service worker was
- * evicted mid-walk and nothing is coming.
+ * A job that died with the service worker. The worker says so itself when it next
+ * wakes, which the keepalive alarm makes a matter of seconds.
  */
-const FETCH_SILENCE_MS = 150000;
-
-function watchFetch(searchId) {
-  clearTimeout(pageFetchWatchdogs.get(searchId));
-  pageFetchWatchdogs.set(
-    searchId,
-    setTimeout(() => {
-      pageFetchWatchdogs.delete(searchId);
-      // Pages are persisted as they arrive, so nothing fetched is lost — only the loop.
-      flashNote(searchId, 'Stopped early. Pages already fetched were kept — click to carry on.');
-    }, FETCH_SILENCE_MS)
-  );
-}
-
-function stopWatchingFetch(searchId) {
-  clearTimeout(pageFetchWatchdogs.get(searchId));
-  pageFetchWatchdogs.delete(searchId);
-}
+const INTERRUPTED = {
+  // Pages are persisted as they arrive, so nothing fetched is lost — only the loop.
+  VC_MORE_DONE: 'Stopped early. Pages already fetched were kept — click to carry on.',
+  VC_RECHECK_DONE: 'The check was cut short — click Refresh to run it again.'
+};
 
 const REFUSED = {
   sweep_running: 'Wait for the sweep to finish.',
@@ -81,8 +82,13 @@ const ABORT_BANNER = {
   rate_limited: 'Sweep stopped: Amazon is rate-limiting. Wait a few minutes, or raise the delay in Options.',
   repeated_failures:
     'Sweep stopped: several searches in a row failed, so the rest were not tried. Check your connection, then run Self-test in Options to see what Amazon returned.',
-  stopped: 'Sweep stopped early. Results below are from the searches that did run.'
+  stopped: 'Sweep stopped early. Results below are from the searches that did run.',
+  interrupted:
+    'The last sweep was cut short when the browser or the extension restarted. Results below are from the searches that did run.'
 };
+
+/** Aborts that are nobody's fault and need no fixing, so they read as a note, not an error. */
+const MILD_ABORTS = new Set(['stopped', 'interrupted']);
 
 function relTime(ts) {
   if (!ts) return 'never';
@@ -154,13 +160,15 @@ function sortState(sortBy) {
 }
 
 async function render() {
-  const [searches, results, seen, run, settings] = await Promise.all([
+  const [searches, results, seen, run, settings, job] = await Promise.all([
     getSearches(),
     getResults(),
     getSeen(),
     getRunState(),
-    getSettings()
+    getSettings(),
+    getSoloJob()
   ]);
+  currentJob = job;
 
   renderHeader(searches, run);
   if (sortBy === null) sortBy = settings.sortBy;
@@ -280,7 +288,7 @@ function renderHeader(searches, run) {
   const banner = $('banner');
   const msg = !running && run.abortReason ? ABORT_BANNER[run.abortReason] : null;
   banner.classList.toggle('hidden', !msg);
-  banner.classList.toggle('warn', run.abortReason === 'stopped');
+  banner.classList.toggle('warn', MILD_ABORTS.has(run.abortReason));
   if (msg) banner.textContent = msg;
 }
 
@@ -318,16 +326,13 @@ function renderTruncationNote(search, result) {
   const batch = remaining ? Math.min(remaining, Math.max(1, currentSettings.maxPages || 1)) : 0;
   const more = document.createElement('button');
   more.textContent = batch ? `Fetch ${batch} more page${batch === 1 ? '' : 's'}` : 'Fetch more pages';
+  more.disabled = !!currentJob; // one job at a time; the worker would refuse anyway
   more.addEventListener('click', async () => {
     more.disabled = true;
     const res = await chrome.runtime.sendMessage({ type: 'VC_FETCH_MORE', searchId: search.id });
-    if (res && res.started) {
-      rowNote.set(search.id, 'Fetching…');
-      watchFetch(search.id);
-      render();
-    } else {
-      flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
-    }
+    // The worker records the job before it answers, so a plain render picks it up.
+    if (res && res.started) render();
+    else flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
   });
   note.append(more);
 
@@ -336,7 +341,6 @@ function renderTruncationNote(search, result) {
 
 /** Show a one-off line on the row, then let the row go back to what it was saying. */
 function flashNote(searchId, text) {
-  stopWatchingFetch(searchId);
   rowNote.set(searchId, text);
   render();
   setTimeout(() => {
@@ -409,28 +413,35 @@ function renderRow({ search, result, newItems }) {
     const refresh = document.createElement('button');
     refresh.textContent = 'Refresh';
     refresh.title = 'Check this search again now';
+    refresh.disabled = !!currentJob;
     refresh.addEventListener('click', async () => {
       refresh.disabled = true;
       const res = await chrome.runtime.sendMessage({ type: 'VC_RECHECK', searchId: search.id });
-      if (res && res.started) {
-        rowNote.set(search.id, 'Checking…');
-        watchFetch(search.id);
-        render();
-      } else {
-        flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
-      }
+      if (res && res.started) render();
+      else flashNote(search.id, (res && REFUSED[res.reason]) || 'Could not start.');
     });
     actions.append(refresh);
   }
 
-  if (newItems.length) {
+  // A row draws a capped batch. "Mark seen" acknowledges that batch and nothing else:
+  // the items past the cap have not been on screen, and clearing them here would be
+  // exactly the silent acknowledgement the whole model exists to prevent.
+  const shown = newItems.slice(0, ITEM_CAP[mode]);
+  const held = newItems.length - shown.length;
+
+  if (shown.length) {
     const ack = document.createElement('button');
-    ack.textContent = 'Mark seen';
+    ack.textContent = held ? `Mark these ${shown.length} seen` : 'Mark seen';
     ack.addEventListener('click', async () => {
-      await chrome.runtime.sendMessage({ type: 'VC_ACK', searchId: search.id });
-      // Acknowledging empties newItems, so the row would re-render as an empty shell
-      // holding one button. Collapse it — the click was the user saying "done with this".
-      expanded.delete(search.id);
+      await chrome.runtime.sendMessage({
+        type: 'VC_ACK',
+        searchId: search.id,
+        asins: shown.map((item) => item.asin)
+      });
+      // Acknowledging the last of them empties the row, which would re-render as a
+      // shell holding one button. Collapse it — the click was the user saying "done
+      // with this". With more held back it stays open and shows the next batch.
+      if (!held) expanded.delete(search.id);
       render();
     });
     actions.append(ack);
@@ -452,12 +463,21 @@ function renderRow({ search, result, newItems }) {
 
   const note = rowNote.get(search.id);
   if (note) row.append(mutedLine(note));
+  else if (currentJob && currentJob.searchId === search.id) row.append(mutedLine(jobNote(currentJob)));
   else if (result && result.truncated) row.append(renderTruncationNote(search, result));
 
-  if (newItems.length) {
+  if (held) {
+    row.append(
+      mutedLine(
+        `Showing ${shown.length} of ${newItems.length} new. Mark these seen to bring up the next ${Math.min(held, ITEM_CAP[mode])}.`
+      )
+    );
+  }
+
+  if (shown.length) {
     const grid = document.createElement('div');
     grid.className = 'items';
-    for (const item of newItems.slice(0, ITEM_CAP[mode])) {
+    for (const item of shown) {
       const a = document.createElement('a');
       a.className = 'item';
       a.href = `https://www.amazon.com/dp/${item.asin}`;
@@ -558,27 +578,17 @@ export function initView(viewMode) {
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg) return;
 
-    if (msg.type === 'VC_PROGRESS' || msg.type === 'VC_DONE') {
+    // Progress is drawn from what the worker stored, not from the message: the message
+    // only says "look again".
+    const redraw = ['VC_PROGRESS', 'VC_DONE', 'VC_MORE_PROGRESS', 'VC_RECHECK_PROGRESS'];
+    if (redraw.includes(msg.type)) {
       render();
-    } else if (msg.type === 'VC_MORE_PROGRESS') {
-      rowNote.set(msg.searchId, `Fetching page ${msg.page} of ${msg.lastPage}…`);
-      watchFetch(msg.searchId);
-      render();
-    } else if (msg.type === 'VC_RECHECK_PROGRESS') {
-      rowNote.set(msg.searchId, `Checking page ${msg.page}…`);
-      watchFetch(msg.searchId);
-      render();
-    } else if (msg.type === 'VC_RECHECK_DONE') {
-      stopWatchingFetch(msg.searchId);
+    } else if (msg.type === 'VC_RECHECK_DONE' || msg.type === 'VC_MORE_DONE') {
       rowNote.delete(msg.searchId);
       // A per-search failure is stored on the result and the row renders it; only an
-      // aborted check has nothing to show for itself.
+      // aborted or interrupted job has nothing to show for itself.
       if (msg.status === 'ok') render();
-      else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
-    } else if (msg.type === 'VC_MORE_DONE') {
-      stopWatchingFetch(msg.searchId);
-      rowNote.delete(msg.searchId);
-      if (msg.status === 'ok') render();
+      else if (msg.status === 'interrupted') flashNote(msg.searchId, INTERRUPTED[msg.type]);
       else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
     }
   });

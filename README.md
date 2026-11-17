@@ -92,9 +92,13 @@ check found, marked *check failed*, so one bad response does not empty the row o
 its new items from the badge. Five failures in a row stop the sweep: at that point it is
 the connection or Amazon, not the searches.
 
+A sweep that was still running when the browser closed is not picked up again on the next
+launch. What it had already checked stands, and the header says it was cut short.
+
 **New means never acknowledged.** An item counts as new until you acknowledge it — by
 hitting *Open search*, *Mark seen* on a row, or *Mark all seen*. Repeated sweeps will not
-quietly clear a find you haven't looked at yet. Newness is global: an ASIN you have seen
+quietly clear a find you haven't looked at yet. A row with more new items than it can
+show marks only the ones on screen as seen, then brings up the next batch. Newness is global: an ASIN you have seen
 in one search is not new in another.
 
 **Background checks.** Options → *Check automatically in the background*. The toolbar
