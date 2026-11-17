@@ -1,6 +1,6 @@
 {
   "name": "vine-checker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Chrome extension that sweeps saved Amazon Vine searches for new items.",
   "license": "MIT",

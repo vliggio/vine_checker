@@ -1,5 +1,6 @@
 /**
- * Typed accessors over chrome.storage.local.
+ * Typed accessors over chrome.storage.local, plus the few chrome.storage.session keys
+ * at the bottom.
  *
  * Keys:
  *   searches  [{id, label, url, enabled}]
@@ -134,6 +135,38 @@ export async function getRunState() {
 export async function setRunState(state) {
   await set('runState', state);
 }
+
+/* ---------- session ---------- */
+
+/*
+ * chrome.storage.session outlives a service worker eviction and is wiped when the
+ * browser or the extension restarts. That is exactly the lifetime of the three things
+ * kept here, and the wrong one for everything above:
+ *
+ *   collector  {tabId, ours}   a tab id means nothing in the next browser session
+ *   soloJob    {kind, searchId, page, lastPage, ts}   the single-search job in flight
+ *   sweepMark  startedTs of the sweep this browser session started
+ *
+ * sweepMark is how a wake-up tells an evicted sweep (mark still matches runState, so
+ * resume it) from one the browser was closed on (mark gone, so do not).
+ */
+
+async function sessionGet(key) {
+  const out = await chrome.storage.session.get(key);
+  return out[key] === undefined ? null : out[key];
+}
+
+async function sessionSet(key, value) {
+  if (value === null || value === undefined) await chrome.storage.session.remove(key);
+  else await chrome.storage.session.set({ [key]: value });
+}
+
+export const getCollector = () => sessionGet('collector');
+export const setCollector = (value) => sessionSet('collector', value);
+export const getSoloJob = () => sessionGet('soloJob');
+export const setSoloJob = (value) => sessionSet('soloJob', value);
+export const getSweepMark = () => sessionGet('sweepMark');
+export const setSweepMark = (value) => sessionSet('sweepMark', value);
 
 /* ---------- derived ---------- */
 

@@ -18,6 +18,12 @@ import {
   markSeen,
   pruneResults,
   listedResults,
+  getCollector,
+  setCollector,
+  getSoloJob,
+  setSoloJob,
+  getSweepMark,
+  setSweepMark,
   computeNewItems,
   countNewTotal
 } from './storage.js';
@@ -39,7 +45,14 @@ const MAX_FAIL_STREAK = 5;
 /** What `soloJob` holds during a self-test, which has no search id of its own. */
 const SELFTEST_JOB = 'selftest';
 
-/** Transient, per-service-worker-lifetime state. Everything durable lives in storage. */
+/**
+ * Transient, per-service-worker-lifetime state. Everything durable lives in storage.
+ *
+ * `pumping` and `soloJob` are locks, and locks are meant to reset when the worker
+ * dies: whatever held them died with it. What a later wake-up needs in order to clean
+ * up after them — which tab was ours, which job was running — is mirrored into
+ * chrome.storage.session (see storage.js), and recover() reads it back.
+ */
 let pumping = false;
 /** Held for the length of a recheck or a page walk, so the two cannot overlap. */
 let soloJob = null;
@@ -51,6 +64,7 @@ let soloJob = null;
  * concurrency this extension is built to avoid.
  */
 let claimingCollector = false;
+/** Cache of the session-stored `collector` record; null also means "not looked up yet". */
 let collectorTabId = null;
 let collectorTabIsOurs = false;
 /** Tabs that refused injection, so we stop re-picking the same broken host. */
@@ -66,6 +80,17 @@ function broadcast(message) {
 /* ------------------------------------------------------------------ collector */
 
 async function ensureCollectorTab() {
+  if (collectorTabId === null) {
+    // An eviction forgets the tab but does not close it. Without this the resumed
+    // sweep either opened a second tab or re-found its own through the reuse query,
+    // marked it "not ours", and left it open for good.
+    const recorded = await getCollector();
+    if (recorded) {
+      collectorTabId = recorded.tabId;
+      collectorTabIsOurs = !!recorded.ours;
+    }
+  }
+
   if (collectorTabId !== null) {
     try {
       const tab = await chrome.tabs.get(collectorTabId);
@@ -73,8 +98,8 @@ async function ensureCollectorTab() {
     } catch (e) {
       /* tab is gone */
     }
-    collectorTabId = null;
-    collectorTabIsOurs = false;
+    // Closes it if it was ours and merely unusable, rather than abandoning it.
+    await releaseCollectorTab();
   }
 
   const settings = await getSettings();
@@ -84,9 +109,7 @@ async function ensureCollectorTab() {
     if (usable) {
       try {
         await injectCollector(usable.id);
-        collectorTabId = usable.id;
-        collectorTabIsOurs = false;
-        return collectorTabId;
+        return await rememberCollector(usable.id, false);
       } catch (e) {
         // Fall through to opening our own tab rather than retrying this one forever.
         unusableTabs.add(usable.id);
@@ -102,9 +125,14 @@ async function ensureCollectorTab() {
     await chrome.tabs.remove(tab.id).catch(() => {});
     throw e;
   }
-  collectorTabId = tab.id;
-  collectorTabIsOurs = true;
-  return tab.id;
+  return rememberCollector(tab.id, true);
+}
+
+async function rememberCollector(tabId, ours) {
+  collectorTabId = tabId;
+  collectorTabIsOurs = ours;
+  await setCollector({ tabId, ours });
+  return tabId;
 }
 
 function waitForTabComplete(tabId, timeoutMs = 45000) {
@@ -141,15 +169,28 @@ async function injectCollector(tabId) {
 }
 
 async function releaseCollectorTab() {
-  if (collectorTabId !== null && collectorTabIsOurs) {
-    try {
-      await chrome.tabs.remove(collectorTabId);
-    } catch (e) {
-      /* already closed */
+  let tabId = collectorTabId;
+  let ours = collectorTabIsOurs;
+  if (tabId === null) {
+    // Nothing cached does not mean nothing open: a worker that has just woken up is
+    // releasing a tab its predecessor acquired.
+    const recorded = await getCollector();
+    if (recorded) {
+      tabId = recorded.tabId;
+      ours = !!recorded.ours;
     }
   }
   collectorTabId = null;
   collectorTabIsOurs = false;
+
+  if (tabId !== null && ours) {
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch (e) {
+      /* already closed */
+    }
+  }
+  await setCollector(null);
 }
 
 /**
@@ -164,9 +205,9 @@ async function collect(url) {
       return await chrome.tabs.sendMessage(tabId, { type: 'VC_FETCH', url });
     } catch (e) {
       // The host tab navigated, closed, or refused injection: drop it and re-acquire.
+      // Released rather than forgotten, so a tab we opened is closed, not orphaned.
       lastError = String((e && e.message) || e);
-      collectorTabId = null;
-      collectorTabIsOurs = false;
+      await releaseCollectorTab();
     }
   }
   return { ok: false, status: 'network_error', message: lastError };
@@ -190,7 +231,7 @@ async function checkSearch(search, settings, onPage) {
   for (let page = 1; page <= Math.max(1, settings.maxPages); page += 1) {
     if (page > lastPage) break;
 
-    if (onPage) onPage(page);
+    if (onPage) await onPage(page);
     const url = withPage(search.url, page);
     let res = await collect(url);
 
@@ -280,16 +321,8 @@ async function startFetchMore(searchId) {
       return { started: false, reason: 'nothing_to_fetch' };
     }
 
-    soloJob = searchId;
-    // Same keepalive a sweep uses: at the configured delay this outlives the worker's
-    // idle timeout long before it runs out of pages.
-    await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-
-    runFetchMore(search, result).finally(async () => {
-      soloJob = null;
-      await chrome.alarms.clear(KEEPALIVE_ALARM);
-      await releaseCollectorTab();
-    });
+    await beginSolo('more', searchId);
+    endSoloWith(runFetchMore(search, result), { type: 'VC_MORE_DONE', searchId, status: 'error' });
 
     return { started: true };
   } finally {
@@ -314,6 +347,7 @@ async function runFetchMore(search, result) {
 
   try {
     for (let page = fetchedThrough + 1; page <= Math.min(lastPage, stopAt); page += 1) {
+      await soloProgress({ kind: 'more', searchId: search.id, page, lastPage });
       broadcast({ type: 'VC_MORE_PROGRESS', searchId: search.id, page, lastPage });
 
       const url = withPage(search.url, page);
@@ -362,14 +396,14 @@ async function runFetchMore(search, result) {
     console.error('[vine-checker] fetching remaining pages failed', err);
   }
 
-  broadcast({
+  return {
     type: 'VC_MORE_DONE',
     searchId: search.id,
     status,
     pagesFetched: fetchedThrough,
     lastPage,
     newTotal: await countNewTotal()
-  });
+  };
 }
 
 /**
@@ -393,14 +427,8 @@ async function startRecheck(searchId) {
     const search = (await getSearches()).find((s) => s.id === searchId);
     if (!search) return { started: false, reason: 'nothing_to_fetch' };
 
-    soloJob = searchId;
-    await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
-
-    runRecheck(search).finally(async () => {
-      soloJob = null;
-      await chrome.alarms.clear(KEEPALIVE_ALARM);
-      await releaseCollectorTab();
-    });
+    await beginSolo('recheck', searchId);
+    endSoloWith(runRecheck(search), { type: 'VC_RECHECK_DONE', searchId, status: 'error' });
 
     return { started: true };
   } finally {
@@ -413,9 +441,10 @@ async function runRecheck(search) {
   let status = 'ok';
 
   try {
-    const outcome = await checkSearch(search, settings, (page) =>
-      broadcast({ type: 'VC_RECHECK_PROGRESS', searchId: search.id, page })
-    );
+    const outcome = await checkSearch(search, settings, async (page) => {
+      await soloProgress({ kind: 'recheck', searchId: search.id, page });
+      broadcast({ type: 'VC_RECHECK_PROGRESS', searchId: search.id, page });
+    });
     if (outcome.abort) {
       // Signed out, CAPTCHA or throttled: nothing to store, and the row must say why.
       status = outcome.abort;
@@ -434,7 +463,45 @@ async function runRecheck(search) {
     console.error('[vine-checker] recheck failed', err);
   }
 
-  broadcast({ type: 'VC_RECHECK_DONE', searchId: search.id, status, newTotal: await countNewTotal() });
+  return { type: 'VC_RECHECK_DONE', searchId: search.id, status, newTotal: await countNewTotal() };
+}
+
+/* ------------------------------------------------- single-search job lifetime */
+
+/**
+ * Take the in-memory lock and record the job where the view and the next wake-up can
+ * see it. The keepalive is the same one a sweep uses: at the configured delay a page
+ * walk outlives the worker's idle timeout long before it runs out of pages.
+ */
+async function beginSolo(kind, searchId) {
+  soloJob = searchId;
+  await setSoloJob({ kind, searchId, ts: Date.now() });
+  await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
+}
+
+function soloProgress(job) {
+  return setSoloJob({ ...job, ts: Date.now() });
+}
+
+/**
+ * Tear a job down and only then announce it. The view redraws on the DONE message and
+ * reads the job record while it does, so the record has to be gone first or the row
+ * goes on saying "Checking…" about a job that has finished.
+ */
+function endSoloWith(work, onCrash) {
+  work
+    .catch((err) => {
+      console.error('[vine-checker] single-search job failed', err);
+      return onCrash;
+    })
+    .then(async (done) => {
+      soloJob = null;
+      await setSoloJob(null);
+      await chrome.alarms.clear(KEEPALIVE_ALARM);
+      await releaseCollectorTab();
+      broadcast(done);
+    })
+    .catch((err) => console.error('[vine-checker] single-search job cleanup failed', err));
 }
 
 /**
@@ -478,6 +545,29 @@ function throttle(settings) {
   return sleep(base + Math.floor(Math.random() * base));
 }
 
+/**
+ * Every write to runState goes through here, one at a time, as a change to whatever is
+ * stored at that moment.
+ *
+ * The pump used to write back a copy it had read several awaits earlier. A Stop that
+ * landed in between was overwritten with `running: true` and silently lost. Re-reading
+ * inside a single queue means a writer can only ever change its own fields.
+ *
+ * `change` returns the next state, or nothing to leave it alone. Resolves to the state
+ * as it now stands.
+ */
+let runStateWrites = Promise.resolve();
+function updateRunState(change) {
+  const write = runStateWrites.then(async () => {
+    const state = await getRunState();
+    const next = change(state);
+    if (next) await setRunState(next);
+    return next || state;
+  });
+  runStateWrites = write.catch(() => {});
+  return write;
+}
+
 export async function startRun({ manual = true } = {}) {
   // They share the collector tab and the same rate limit.
   if (soloJob) return { started: false, reason: 'fetching_more' };
@@ -499,10 +589,11 @@ export async function startRun({ manual = true } = {}) {
     // The one point where nothing else is writing `results`.
     await pruneResults(all);
 
-    await setRunState({
+    const startedTs = Date.now();
+    await updateRunState(() => ({
       running: true,
       manual,
-      startedTs: Date.now(),
+      startedTs,
       total: searches.length,
       done: 0,
       queue: searches.map((s) => s.id),
@@ -510,7 +601,9 @@ export async function startRun({ manual = true } = {}) {
       failStreak: 0,
       currentLabel: '',
       abortReason: null
-    });
+    }));
+    // Marks the sweep as belonging to this browser session; see recover().
+    await setSweepMark(startedTs);
 
     await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
     pump();
@@ -527,10 +620,12 @@ export async function startRun({ manual = true } = {}) {
  * so we never tear the collector tab down underneath an in-flight fetch.
  */
 export async function stopRun(reason = 'stopped') {
-  const state = await getRunState();
-  if (!state.running) return;
-  await setRunState({ ...state, running: false, abortReason: reason });
-  if (!pumping) await finishRun(reason);
+  let wasRunning = false;
+  await updateRunState((state) => {
+    wasRunning = !!state.running;
+    return wasRunning ? { ...state, running: false, abortReason: reason } : null;
+  });
+  if (wasRunning && !pumping) await finishRun(reason);
 }
 
 /**
@@ -557,11 +652,11 @@ async function pump() {
 
       // The search was deleted or disabled while queued: drop it silently.
       if (!search) {
-        await setRunState({ ...state, queue: state.queue.slice(1), done: state.done + 1 });
+        await updateRunState((s) => ({ ...s, queue: (s.queue || []).slice(1), done: (s.done || 0) + 1 }));
         continue;
       }
 
-      await setRunState({ ...state, currentLabel: search.label });
+      await updateRunState((s) => ({ ...s, currentLabel: search.label }));
       broadcast({ type: 'VC_PROGRESS', done: state.done, total: state.total, label: search.label });
 
       const outcome = await checkSearch(search, settings);
@@ -585,25 +680,23 @@ async function pump() {
 
       // Kept in runState, not a local: an eviction mid-streak must not reset the count
       // and buy a failing sweep another five requests on every wake-up.
-      const next = await getRunState();
-      const failStreak = outcome.result.status === 'ok' ? 0 : (next.failStreak || 0) + 1;
-      await setRunState({
-        ...next,
-        queue: next.queue.slice(1),
-        done: next.done + 1,
-        foundNew: (next.foundNew || 0) + fresh,
-        failStreak
-      });
+      const failed = outcome.result.status !== 'ok';
+      const next = await updateRunState((s) => ({
+        ...s,
+        queue: (s.queue || []).slice(1),
+        done: (s.done || 0) + 1,
+        foundNew: (s.foundNew || 0) + fresh,
+        failStreak: failed ? (s.failStreak || 0) + 1 : 0
+      }));
       await refreshBadge();
-      broadcast({ type: 'VC_PROGRESS', done: next.done + 1, total: next.total, label: search.label });
+      broadcast({ type: 'VC_PROGRESS', done: next.done, total: next.total, label: search.label });
 
-      if (failStreak >= MAX_FAIL_STREAK) {
+      if (next.failStreak >= MAX_FAIL_STREAK) {
         abortReason = 'repeated_failures';
         break;
       }
 
-      const remaining = (await getRunState()).queue;
-      if (remaining && remaining.length) await throttle(settings);
+      if (next.queue.length) await throttle(settings);
     }
   } catch (err) {
     abortReason = 'error';
@@ -627,21 +720,29 @@ async function countFreshlyAppeared(searchId, result) {
 }
 
 async function finishRun(abortReason) {
-  const state = await getRunState();
-  if (state.finished) return; // stopRun and pump can both land here
-
-  const reason = abortReason || state.abortReason || null;
-  await setRunState({
-    ...state,
-    running: false,
-    finished: true,
-    queue: [],
-    currentLabel: '',
-    finishedTs: Date.now(),
-    lastRunTs: Date.now(),
-    abortReason: reason
+  let state = null;
+  let reason = null;
+  await updateRunState((s) => {
+    if (s.finished) return null; // stopRun and pump can both land here
+    state = s;
+    reason = abortReason || s.abortReason || null;
+    // An interrupted sweep is being closed out long after it actually stopped, so
+    // "last checked" is when it started, not the moment the browser came back.
+    const when = reason === 'interrupted' ? s.startedTs || Date.now() : Date.now();
+    return {
+      ...s,
+      running: false,
+      finished: true,
+      queue: [],
+      currentLabel: '',
+      finishedTs: when,
+      lastRunTs: when,
+      abortReason: reason
+    };
   });
+  if (!state) return;
 
+  await setSweepMark(null);
   await chrome.alarms.clear(KEEPALIVE_ALARM);
   await releaseCollectorTab();
   unusableTabs.clear();
@@ -708,6 +809,7 @@ async function syncAutoAlarm() {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  await recovered;
   if (alarm.name === AUTO_ALARM) {
     await startRun({ manual: false });
   } else if (alarm.name === KEEPALIVE_ALARM) {
@@ -715,6 +817,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // worker was evicted between searches.
     const state = await getRunState();
     if (state.running) pump();
+    // A keepalive with nothing to keep alive is a leak: it would wake the worker
+    // twice a minute for ever. `pumping` covers a stopped sweep's last request.
+    else if (!pumping && !soloJob) await chrome.alarms.clear(KEEPALIVE_ALARM);
   }
 });
 
@@ -724,6 +829,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string' || !msg.type.startsWith('VC_')) return undefined;
 
   (async () => {
+    // Nothing may touch the collector or runState until the wake-up has finished
+    // clearing up after the previous worker. The entry points still take their claim
+    // synchronously once they run.
+    await recovered;
     switch (msg.type) {
       case 'VC_START':
         sendResponse(await startRun({ manual: true }));
@@ -737,7 +846,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'VC_ACK': {
         const results = await getResults();
         const result = results[msg.searchId];
-        await markSeen((result && result.items ? result.items : []).map((i) => i.asin));
+        let asins = (result && result.items ? result.items : []).map((i) => i.asin);
+        // "Mark seen" names the items it was showing. A row draws a capped batch, and
+        // acknowledging the whole result would clear the ones past the cap unseen.
+        // "Open search" sends no list: going to look at the search covers all of it.
+        if (Array.isArray(msg.asins)) {
+          const shown = new Set(msg.asins);
+          asins = asins.filter((asin) => shown.has(asin));
+        }
+        await markSeen(asins);
         await refreshBadge();
         sendResponse({ ok: true });
         break;
@@ -800,7 +917,46 @@ chrome.runtime.onStartup.addListener(async () => {
   await refreshBadge();
 });
 
-// Resume an interrupted sweep as soon as the worker comes back to life.
-getRunState().then((state) => {
-  if (state && state.running) pump();
-});
+/**
+ * Runs once per worker lifetime, before anything else is allowed to act.
+ *
+ * A fresh worker holds no locks, so whatever the session records say was in flight
+ * died with the previous one. This is where that gets cleared up:
+ *
+ * - a single-search job cannot be resumed (its loop was in memory), so its record is
+ *   dropped and the view told, instead of leaving the view to guess from silence
+ * - a sweep whose mark is still in session storage was only evicted: resume it
+ * - a sweep with no mark was cut off by the browser or the extension restarting.
+ *   Picking it up hours later, unasked, is not what anyone clicked for, so it is
+ *   closed out as `interrupted` and the results it did gather stand
+ * - with no sweep to hand them to, the keepalive and a collector tab we opened go too
+ */
+async function recover() {
+  const [state, job, mark] = await Promise.all([getRunState(), getSoloJob(), getSweepMark()]);
+
+  if (job) {
+    await setSoloJob(null);
+    if (job.kind === 'more' || job.kind === 'recheck') {
+      broadcast({
+        type: job.kind === 'more' ? 'VC_MORE_DONE' : 'VC_RECHECK_DONE',
+        searchId: job.searchId,
+        status: 'interrupted',
+        newTotal: await countNewTotal()
+      });
+    }
+  }
+
+  if (state.running && mark === state.startedTs) {
+    pump();
+    return;
+  }
+
+  if (state.running) {
+    await finishRun('interrupted'); // clears the keepalive and the tab itself
+  } else {
+    await chrome.alarms.clear(KEEPALIVE_ALARM);
+    await releaseCollectorTab();
+  }
+}
+
+const recovered = recover().catch((err) => console.error('[vine-checker] recovery failed', err));

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vine Checker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sweeps your saved Amazon Vine searches, reports which have items, and flags the ones you have never seen.",
   "minimum_chrome_version": "116",
   "permissions": [

@@ -80,7 +80,18 @@ reviews:
           `runState` in chrome.storage.local does. Any new per-sweep state that has to
           outlive a wake-up belongs in `runState`, persisted after every search — not
           in a module-level variable. The exceptions are the deliberate in-memory
-          guards (`pumping`), which exist precisely because they should reset on wake.
+          guards (`pumping`, `soloJob`), which exist precisely because they should
+          reset on wake.
+        - Writes to `runState` go through `updateRunState(change)` only. Flag a direct
+          `setRunState` call, or any write built from a copy of the state read before
+          an await — that is how a Stop gets overwritten.
+        - `chrome.storage.session` holds exactly three things — `collector`, `soloJob`
+          and `sweepMark` — because they must survive an eviction and must not survive
+          a browser restart. `recover()` reads them once per wake-up, and the message
+          and alarm handlers `await recovered` first. Flag durable state put in
+          session storage, these keys moved to local storage, or a handler that acts
+          before recovery has finished. A sweep whose `sweepMark` is gone must be
+          closed out as `interrupted`, never resumed.
         - Abort semantics are deliberate: `signin_required`, `captcha` and
           `rate_limited` abort the whole sweep; every other error marks that one search
           and the sweep continues, until `MAX_FAIL_STREAK` searches fail back to back
@@ -143,7 +154,9 @@ reviews:
         The acknowledgement model is the core design decision and the easiest thing to
         wreck without noticing. An ASIN enters `seen` **only** when the user
         acknowledges it (Open search / Mark seen / Mark all seen) — never at check time,
-        never as a side effect of a sweep. "New" means present in the current results
+        never as a side effect of a sweep. A row draws a capped batch, so "Mark seen"
+        sends the ASINs it showed and only those are acknowledged; flag a change that
+        makes it acknowledge the whole result again. "New" means present in the current results
         and absent from `seen`. Flag anything that writes to `seen` from the check path:
         it would let a background sweep silently clear a find nobody has looked at.
 

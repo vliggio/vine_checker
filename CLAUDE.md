@@ -92,18 +92,44 @@ worker is the only writer of `results`; Options must not prune it from its own p
 
 Service worker globals do not survive eviction mid-sweep — only `runState` does.
 
+Three keys live in `chrome.storage.session` instead, also behind `src/storage.js`:
+`collector` (`{tabId, ours}`), `soloJob` (the single-search job in flight) and
+`sweepMark` (the `startedTs` of the sweep this browser session started). Session
+storage outlives a worker eviction and is wiped when the browser or the extension
+restarts, which is the lifetime all three need: a tab id means nothing next session, and
+a missing `sweepMark` is how a wake-up knows a sweep was cut off by a restart rather than
+an eviction. Do not move them to `local`, and do not put durable state in `session`.
+
+**Every write to `runState` goes through `updateRunState(change)`** in `background.js`:
+one queue, each write a change to what is stored at that moment. Writing back a copy
+read a few awaits earlier is how a Stop used to get overwritten with `running: true`.
+
 **The acknowledgement model is the core design decision.** An ASIN enters `seen` *only*
 when the user acknowledges it (Open search / Mark seen / Mark all seen), never at check
 time. "New" = present in the current results AND absent from `seen`. That is what stops a
 background sweep from silently clearing a find nobody has looked at yet.
+
+The same rule applies to what a click covers. A row draws a capped batch of thumbnails
+(`ITEM_CAP`), so *Mark seen* sends the ASINs it was showing (`VC_ACK` with `asins`) and
+the worker acknowledges only those; the row then brings up the next batch. *Open search*
+sends no list and acknowledges the whole result — going to look at the search covers it.
 
 ### Run loop and service worker eviction
 
 A 150-search sweep runs ~10–15 minutes, far longer than an MV3 worker's idle life. So:
 
 - `runState.queue` is persisted after every search; `pump()` drains it
-- A top-level `getRunState().then(...)` in `background.js` resumes an interrupted sweep on
-  every worker wake-up, and a 30s keepalive alarm forces those wake-ups
+- `recover()` runs once at the top of `background.js` on every worker wake-up, and a 30s
+  keepalive alarm forces those wake-ups. It resumes a sweep whose `sweepMark` still
+  matches; closes out one whose mark is gone as `interrupted` (the browser restarted, and
+  nobody asked for a sweep hours later); drops the record of a dead single-search job
+  and tells the view; and, with no sweep left, clears the keepalive and closes a
+  collector tab the extension opened
+- Message and alarm handlers `await recovered` before doing anything, so nothing touches
+  the collector or `runState` while that clean-up is still running
+- The collector tab is recorded in session storage on every acquire, so a resumed sweep
+  adopts the tab it already had instead of opening another or orphaning its own
+- The keepalive handler clears its own alarm when there is no sweep, pump or job left
 - `pumping` (in-memory) prevents concurrent pumps; `runState.finished` makes `finishRun`
   idempotent, since `stopRun` and `pump` can both reach it
 - `stopRun` only flips `running: false` when a pump is active — the pump notices and calls
@@ -169,9 +195,13 @@ Worker ← UI: `VC_START`, `VC_STOP`, `VC_ACK`, `VC_ACK_ALL`, `VC_FETCH_MORE`,
 broadcasts: `VC_PROGRESS`, `VC_DONE`, `VC_MORE_PROGRESS`, `VC_MORE_DONE`,
 `VC_RECHECK_PROGRESS`, `VC_RECHECK_DONE`. Worker → collector: `VC_FETCH`.
 
-Both single-search jobs report per page, not just at the end: the view gives up on a
-silent job after 150s, and one page can outlast that on its own once the rate-limit
-back-off starts sleeping.
+Both single-search jobs record themselves in the session `soloJob` key — at the start,
+and again per page — and the view draws the row's progress line and disables the job
+buttons from that record on every render. The progress broadcasts only mean "look
+again". That is why a results page opened mid-job shows the job, and why the DONE
+broadcast is sent only after the record is cleared (`endSoloWith`). A job that died
+with the worker is reported as `status: 'interrupted'` by `recover()`; the view no longer
+guesses from silence.
 
 `VC_FETCH_MORE` and `VC_RECHECK` answer immediately with `{started}` and report the
 rest by broadcast — the work takes longer than a message port stays open.
