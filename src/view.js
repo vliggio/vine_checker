@@ -79,6 +79,8 @@ const ABORT_BANNER = {
   signin_required: 'Sweep stopped: you are signed out of Amazon. Sign in at amazon.com, then run again.',
   captcha: 'Sweep stopped: Amazon showed a CAPTCHA. Open amazon.com, clear it, then run again.',
   rate_limited: 'Sweep stopped: Amazon is rate-limiting. Wait a few minutes, or raise the delay in Options.',
+  repeated_failures:
+    'Sweep stopped: several searches in a row failed, so the rest were not tried. Check your connection, then run Self-test in Options to see what Amazon returned.',
   stopped: 'Sweep stopped early. Results below are from the searches that did run.'
 };
 
@@ -90,6 +92,15 @@ function relTime(ts) {
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
 }
+
+/**
+ * Why "Check all now" did nothing, for the refusals that would otherwise be silent: the
+ * button is on screen and enabled in both cases.
+ */
+const START_REFUSED = {
+  fetching_more: 'Busy with a single search — try again in a moment.',
+  stopping: 'Still finishing the last request of the stopped sweep — try again in a moment.'
+};
 
 /**
  * Row order within a group. Sorting happens per group, not across the whole list,
@@ -166,12 +177,15 @@ async function render() {
   currentSettings = settings;
 
   const cmp = SORTERS[sortBy] || SORTERS.count;
+  // A row whose last check failed keeps the items from the check before it, so it can
+  // hold new items and a failure at once. New wins — it is listed once, at the top —
+  // and a failed row with nothing new still stays out of the groups hideSeen hides.
+  const failed = (r) => r.result && (r.result.status !== 'ok' || r.result.lastError);
+  const settled = (r) => !r.newItems.length && r.result && !failed(r);
   const withNew = rows.filter((r) => r.newItems.length).sort(cmp);
-  const errored = rows.filter((r) => r.result && r.result.status !== 'ok').sort(cmp);
-  const stocked = rows
-    .filter((r) => !r.newItems.length && r.result && r.result.status === 'ok' && r.result.total > 0)
-    .sort(cmp);
-  const empty = rows.filter((r) => !r.newItems.length && r.result && r.result.status === 'ok' && !r.result.total);
+  const errored = rows.filter((r) => !r.newItems.length && failed(r)).sort(cmp);
+  const stocked = rows.filter((r) => settled(r) && r.result.total > 0).sort(cmp);
+  const empty = rows.filter((r) => settled(r) && !r.result.total);
   const unchecked = rows.filter((r) => !r.result);
 
   const list = $('list');
@@ -359,6 +373,8 @@ function renderRow({ search, result, newItems }) {
     counts.innerHTML = newItems.length
       ? `${total} · <span class="new">${newItems.length} new</span>`
       : total;
+    // The numbers are from the last check that worked; say so without opening the row.
+    if (result.lastError) counts.innerHTML += ' · <span class="failed">check failed</span>';
   } else {
     counts.textContent = 'not checked';
   }
@@ -425,6 +441,15 @@ function renderRow({ search, result, newItems }) {
     row.append(mutedLine(`Includes ${result.retained} item(s) kept from pages past this sweep's reach.`));
   }
 
+  if (result && result.status === 'ok' && result.lastError) {
+    const why = STATUS_TEXT[result.lastError.status] || result.lastError.status;
+    row.append(
+      mutedLine(
+        `Last check failed ${relTime(result.lastError.ts)} (${why}). Showing what the check before it found, from ${relTime(result.lastRunTs)}.`
+      )
+    );
+  }
+
   const note = rowNote.get(search.id);
   if (note) row.append(mutedLine(note));
   else if (result && result.truncated) row.append(renderTruncationNote(search, result));
@@ -480,8 +505,8 @@ export function initView(viewMode) {
     if (res && !res.started && res.reason === 'no_searches') chrome.runtime.openOptionsPage();
     await render();
     // Otherwise the button just does nothing and the reason is invisible.
-    if (res && !res.started && res.reason === 'fetching_more') {
-      $('status').textContent = 'Fetching extra pages for one search — try again in a moment.';
+    if (res && !res.started && START_REFUSED[res.reason]) {
+      $('status').textContent = START_REFUSED[res.reason];
     }
   });
 
@@ -546,8 +571,8 @@ export function initView(viewMode) {
     } else if (msg.type === 'VC_RECHECK_DONE') {
       stopWatchingFetch(msg.searchId);
       rowNote.delete(msg.searchId);
-      // A per-search failure is stored on the result and renders as an error row; only
-      // an aborted check has nothing to show for itself.
+      // A per-search failure is stored on the result and the row renders it; only an
+      // aborted check has nothing to show for itself.
       if (msg.status === 'ok') render();
       else flashNote(msg.searchId, `Stopped: ${STATUS_TEXT[msg.status] || msg.status}.`);
     } else if (msg.type === 'VC_MORE_DONE') {
