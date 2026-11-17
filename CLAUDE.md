@@ -85,6 +85,11 @@ Everything durable is in `chrome.storage.local` behind `src/storage.js`. Keys: `
 `sortSearches()`, so the Options list, the text export and the sweep queue all inherit
 one order and nothing has to sort at the call site.
 
+`results` holds entries the list does not draw — disabled searches, and deleted ones
+until `startRun` prunes them. The badge, the notification and `VC_ACK_ALL` all go through
+`listedResults()` (enabled searches only) so they agree with what is on screen. The
+worker is the only writer of `results`; Options must not prune it from its own page.
+
 Service worker globals do not survive eviction mid-sweep — only `runState` does.
 
 **The acknowledgement model is the core design decision.** An ASIN enters `seen` *only*
@@ -112,6 +117,9 @@ search, and `startFetchMore()` pulls the pages a sweep skipped for one search. B
 the `claimingCollector` claim and hold `soloJob` for their duration, so they cannot run
 together or alongside a sweep.
 
+Options → Self-test is a third user of the collector and takes the same claim, holding
+`soloJob` for its one request; it answers `busy` rather than run beside anything else.
+
 A recheck stores its result through the same merge the pump uses and refreshes the
 badge, but never notifies: the user is looking at the row they asked about. It updates
 that result's own `lastRunTs`; the header's sweep timestamp is `runState`, untouched.
@@ -121,8 +129,11 @@ stays truncated until the pages run out, so it is clicked again rather than comm
 to a twenty-page wait. Both share the sweep's machinery deliberately: same `collect()`,
 same `throttle()`, same rate-limit back-off. Two constraints fall out of that sharing:
 
-- they refuse while `runState.running`, and `startRun` refuses while one is going — they
-  would otherwise fight over the collector tab and the same rate limit
+- they refuse while `runState.running` **or `pumping`**, and `startRun` refuses while
+  one is going — they would otherwise fight over the collector tab and the same rate
+  limit. `pumping` matters because Stop clears `running` at once while the pump is still
+  inside its last request; `startRun` refuses in that window too (`stopping`), or the old
+  pump drains the new queue and pops a search it never checked
 - the merged result is persisted after *every* page, because the in-memory loop dies
   with the worker and only what reached storage survives
 
@@ -132,13 +143,24 @@ those items into each new sweep result. Without that they would vanish on the ne
 and return as "new" the next time relevance floated them back into range. A stamped item
 is dropped once it has gone `settings.keepExtraDays` without being seen again, and loses
 its stamp entirely as soon as a sweep returns it — that is what counts as confirmation.
+Retention only applies to a `truncated` result: a sweep that reached the last page saw
+everything, so a deep item it did not return is gone, not out of range.
 
 Items it pulls land in `results` only. Acknowledgement is still the user's move.
 
 **Abort semantics:** `signin_required`, `captcha` and `rate_limited` abort the entire
-sweep. Any other error marks that one search and the sweep continues. This distinction is
-deliberate — 150 doomed requests against a signed-out session is the failure mode being
-prevented.
+sweep. Any other error marks that one search and the sweep continues — until
+`MAX_FAIL_STREAK` (5) searches have failed back to back, which aborts with
+`repeated_failures`. The streak lives in `runState.failStreak` so an eviction cannot
+reset it. This distinction is deliberate — 150 doomed requests against a signed-out or
+offline session is the failure mode being prevented.
+
+**A failed check never erases a good one.** `mergeFailedResult()` (`src/results.js`)
+keeps the last good result and records the failure on it as `lastError`; the next
+successful check replaces both. Storing the failure in place of the result emptied the
+row, dropped its items from the badge, and made the next good sweep announce the same
+backlog as new. Only a search with no good result behind it stores the failure itself
+(`status !== 'ok'`). Both merges go through `mergeSearchResult()`.
 
 ### Messages
 

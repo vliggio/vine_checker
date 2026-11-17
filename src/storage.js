@@ -6,7 +6,8 @@
  *   seen      {asin: acknowledgedTimestamp}   -- global memory of everything you've looked at
  *   results   {searchId: SearchResult}
  *   settings  see DEFAULT_SETTINGS
- *   runState  {running, index, total, startedTs, finishedTs, abortReason, currentLabel}
+ *   runState  {running, finished, manual, queue, total, done, foundNew, failStreak, startedTs,
+ *              finishedTs, lastRunTs, abortReason, currentLabel}
  */
 
 import { sortSearches } from './urls.js';
@@ -95,6 +96,23 @@ export async function updateResult(searchId, result) {
   await set('results', results);
 }
 
+/**
+ * Drop results whose search no longer exists. Disabled searches keep theirs: turning
+ * one back on should not cost a sweep to find out what it held.
+ *
+ * Called by the worker at the start of a sweep, never from Options when a search is
+ * deleted — the worker is the only writer of `results`, and a second writer in another
+ * page would race the sweep's own read-modify-write.
+ */
+export async function pruneResults(searches) {
+  const keep = new Set(searches.map((s) => s.id));
+  const results = await getResults();
+  const orphans = Object.keys(results).filter((id) => !keep.has(id));
+  if (!orphans.length) return;
+  for (const id of orphans) delete results[id];
+  await set('results', results);
+}
+
 /* ---------- settings ---------- */
 
 export async function getSettings() {
@@ -129,9 +147,26 @@ export function computeNewItems(result, seen) {
   return result.items.filter((item) => !(item.asin in seen));
 }
 
-export async function countNewTotal() {
-  const [results, seen] = await Promise.all([getResults(), getSeen()]);
+/**
+ * The results the list actually draws: one per enabled search.
+ *
+ * `results` also holds entries for disabled searches, and for deleted ones until the
+ * next sweep prunes them. Anything that counts or acknowledges "what is listed" goes
+ * through here, or the badge reports items no row will ever show.
+ */
+export function listedResults(searches, results) {
+  return searches
+    .filter((s) => s.enabled !== false && results[s.id])
+    .map((s) => results[s.id]);
+}
+
+export function countNew(searches, results, seen) {
   let total = 0;
-  for (const id of Object.keys(results)) total += computeNewItems(results[id], seen).length;
+  for (const result of listedResults(searches, results)) total += computeNewItems(result, seen).length;
   return total;
+}
+
+export async function countNewTotal() {
+  const [searches, results, seen] = await Promise.all([getSearches(), getResults(), getSeen()]);
+  return countNew(searches, results, seen);
 }

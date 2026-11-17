@@ -83,11 +83,23 @@ reviews:
           guards (`pumping`), which exist precisely because they should reset on wake.
         - Abort semantics are deliberate: `signin_required`, `captcha` and
           `rate_limited` abort the whole sweep; every other error marks that one search
-          and the sweep continues. Flag changes that blur the two.
+          and the sweep continues, until `MAX_FAIL_STREAK` searches fail back to back
+          and the sweep aborts with `repeated_failures`. The streak is persisted in
+          `runState.failStreak`. Flag changes that blur the two, or that move the
+          streak into a module-level variable.
+        - A failed check must not erase a good one: results are stored through
+          `mergeSearchResult`, which keeps the last good result and records the
+          failure as `lastError`. Flag any path that writes a failed result over one
+          whose status is `ok`.
+        - The badge, the notification and `VC_ACK_ALL` count `listedResults()` —
+          enabled searches only — so they match what the list draws. Flag code that
+          walks every key of `results` instead. The worker is the only writer of
+          `results`; orphans are pruned in `startRun`, not from the Options page.
         - The single-search jobs (`startRecheck`, `startFetchMore`) share the sweep's
           `collect`, `throttle` and back-off on purpose, and every entry point refuses
           while another is running: they contend for the collector tab and the same rate
-          limit. The `claimingCollector` claim must stay synchronous — taken before the
+          limit. "Running" includes `pumping`, not just `runState.running` — a stopped
+          sweep keeps its last request in flight. `VC_SELFTEST` takes the same claim. The `claimingCollector` claim must stay synchronous — taken before the
           first await — or two clicks in one tick both get through. On-demand paging
           pulls at most `maxPages` per click and persists the merged result after every
           page, because its loop is in-memory and dies with the worker. A recheck
@@ -157,7 +169,8 @@ reviews:
         Items fetched past `maxPages` carry `deep`/`deepTs` and are carried across
         sweeps, because a sweep cannot see them and they would otherwise return as "new"
         each time relevance moved them. Retention is bounded by `keepExtraDays`; a
-        confirmed item loses its stamp. Flag anything that keeps deep items forever, or
+        confirmed item loses its stamp, and only a `truncated` result retains anything —
+        a sweep that reached the last page has confirmed a missing item gone. Flag anything that keeps deep items forever, or
         that lets this path write to `seen` — retained items are results, not
         acknowledgements.
 

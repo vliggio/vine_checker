@@ -84,7 +84,13 @@ both go through the same tab and the same rate limit.
 Items pulled this way stick around: later sweeps only reach the first pages, so without
 that they would disappear and come back as *new* whenever Vine's relevance ordering
 floated them into range. They are dropped once they have gone *Keep extra pages for*
-days without turning up again.
+days without turning up again, or as soon as a sweep reaches the search's last page and
+does not find them.
+
+**When a check fails.** A search whose request fails keeps showing what its last good
+check found, marked *check failed*, so one bad response does not empty the row or clear
+its new items from the badge. Five failures in a row stop the sweep: at that point it is
+the connection or Amazon, not the searches.
 
 **New means never acknowledged.** An item counts as new until you acknowledge it — by
 hitting *Open search*, *Mark seen* on a row, or *Mark all seen*. Repeated sweeps will not

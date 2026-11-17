@@ -75,6 +75,8 @@ async function persist() {
   // list and the stored one cannot disagree about where a row belongs.
   searches = sortSearches(searches);
   await setSearches(searches);
+  // The badge counts enabled searches only, so disabling or removing one changes it.
+  await chrome.runtime.sendMessage({ type: 'VC_REFRESH_BADGE' });
 }
 
 function say(el, text, cls) {

@@ -16,15 +16,28 @@ import {
   setRunState,
   updateResult,
   markSeen,
+  pruneResults,
+  listedResults,
   computeNewItems,
   countNewTotal
 } from './storage.js';
 import { withPage } from './urls.js';
-import { markDeep, mergeRetainedItems, expireRetainedItems } from './results.js';
+import { markDeep, mergeSearchResult, expireRetainedItems } from './results.js';
 
 const AUTO_ALARM = 'vc-autocheck';
 const KEEPALIVE_ALARM = 'vc-keepalive';
 const COLLECTOR_URL = 'https://www.amazon.com/vine/vine-items';
+/**
+ * Searches allowed to fail back to back before the sweep gives up.
+ *
+ * One failed search is that search's problem. Several in a row is the connection, or
+ * Amazon answering every request with something that is not a Vine page — and the
+ * other 145 will not fare better. Low enough to stop early, high enough that a couple
+ * of genuinely broken URLs sorting next to each other do not end the run.
+ */
+const MAX_FAIL_STREAK = 5;
+/** What `soloJob` holds during a self-test, which has no search id of its own. */
+const SELFTEST_JOB = 'selftest';
 
 /** Transient, per-service-worker-lifetime state. Everything durable lives in storage. */
 let pumping = false;
@@ -256,7 +269,9 @@ async function startFetchMore(searchId) {
 
   try {
     const state = await getRunState();
-    if (state.running) return { started: false, reason: 'sweep_running' };
+    // `pumping` as well as `running`: Stop clears the flag at once, but the pump is
+    // still inside its last request and still holds the collector tab.
+    if (state.running || pumping) return { started: false, reason: 'sweep_running' };
 
     const [searches, results] = await Promise.all([getSearches(), getResults()]);
     const search = searches.find((s) => s.id === searchId);
@@ -371,7 +386,9 @@ async function startRecheck(searchId) {
 
   try {
     const state = await getRunState();
-    if (state.running) return { started: false, reason: 'sweep_running' };
+    // `pumping` as well as `running`: Stop clears the flag at once, but the pump is
+    // still inside its last request and still holds the collector tab.
+    if (state.running || pumping) return { started: false, reason: 'sweep_running' };
 
     const search = (await getSearches()).find((s) => s.id === searchId);
     if (!search) return { started: false, reason: 'nothing_to_fetch' };
@@ -403,12 +420,12 @@ async function runRecheck(search) {
       // Signed out, CAPTCHA or throttled: nothing to store, and the row must say why.
       status = outcome.abort;
     } else {
-      // Same merge the sweep does, so pulled-in deep pages are not thrown away. A
-      // per-search failure is stored as the result; the row renders it as an error.
+      // Same merge the sweep does, so pulled-in deep pages are not thrown away and a
+      // failed check keeps what the last good one found. The row renders either.
       const previous = (await getResults())[search.id];
       await updateResult(
         search.id,
-        mergeRetainedItems(previous, outcome.result, { now: Date.now(), keepMs: retentionMs(settings) })
+        mergeSearchResult(previous, outcome.result, { now: Date.now(), keepMs: retentionMs(settings) })
       );
       await refreshBadge();
     }
@@ -418,6 +435,37 @@ async function runRecheck(search) {
   }
 
   broadcast({ type: 'VC_RECHECK_DONE', searchId: search.id, status, newTotal: await countNewTotal() });
+}
+
+/**
+ * One live fetch for Options → Self-test.
+ *
+ * It goes through the collector like everything else, so it takes the same claim: run
+ * unguarded during a sweep it was a second request in flight, and its tab release
+ * closed the sweep's tab under the fetch the sweep was waiting on.
+ */
+async function runSelfTest(url) {
+  const busy = {
+    ok: false,
+    status: 'busy',
+    message: 'A sweep or a single-search check is running. Try again when it finishes.'
+  };
+  if (soloJob || pumping || claimingCollector) return busy;
+  claimingCollector = true;
+
+  try {
+    if ((await getRunState()).running) return busy;
+    soloJob = SELFTEST_JOB;
+  } finally {
+    claimingCollector = false;
+  }
+
+  try {
+    return await collect(url);
+  } finally {
+    soloJob = null;
+    await releaseCollectorTab();
+  }
 }
 
 /** How long an unconfirmed deep item survives, in ms. */
@@ -439,9 +487,17 @@ export async function startRun({ manual = true } = {}) {
   try {
     const state = await getRunState();
     if (state.running) return { started: false, reason: 'already_running' };
+    // A stopped sweep is not a finished one. Its pump is still waiting on a request,
+    // and would go on to drain this run's queue as if it were its own — popping a
+    // search it never checked off the front.
+    if (pumping) return { started: false, reason: 'stopping' };
 
-    const searches = await getEnabledSearches();
+    const all = await getSearches();
+    const searches = all.filter((s) => s.enabled !== false);
     if (!searches.length) return { started: false, reason: 'no_searches' };
+
+    // The one point where nothing else is writing `results`.
+    await pruneResults(all);
 
     await setRunState({
       running: true,
@@ -451,6 +507,7 @@ export async function startRun({ manual = true } = {}) {
       done: 0,
       queue: searches.map((s) => s.id),
       foundNew: 0,
+      failStreak: 0,
       currentLabel: '',
       abortReason: null
     });
@@ -516,8 +573,9 @@ async function pump() {
 
       // A sweep only reaches maxPages, so deep items would drop out of the results and
       // come back as "new" the next time relevance floated them into range.
+      // A failed check keeps the last good result instead (see mergeFailedResult).
       const previous = (await getResults())[search.id];
-      const merged = mergeRetainedItems(previous, outcome.result, {
+      const merged = mergeSearchResult(previous, outcome.result, {
         now: Date.now(),
         keepMs: retentionMs(settings)
       });
@@ -525,15 +583,24 @@ async function pump() {
       const fresh = await countFreshlyAppeared(search.id, merged);
       await updateResult(search.id, merged);
 
+      // Kept in runState, not a local: an eviction mid-streak must not reset the count
+      // and buy a failing sweep another five requests on every wake-up.
       const next = await getRunState();
+      const failStreak = outcome.result.status === 'ok' ? 0 : (next.failStreak || 0) + 1;
       await setRunState({
         ...next,
         queue: next.queue.slice(1),
         done: next.done + 1,
-        foundNew: (next.foundNew || 0) + fresh
+        foundNew: (next.foundNew || 0) + fresh,
+        failStreak
       });
       await refreshBadge();
       broadcast({ type: 'VC_PROGRESS', done: next.done + 1, total: next.total, label: search.label });
+
+      if (failStreak >= MAX_FAIL_STREAK) {
+        abortReason = 'repeated_failures';
+        break;
+      }
 
       const remaining = (await getRunState()).queue;
       if (remaining && remaining.length) await throttle(settings);
@@ -590,10 +657,10 @@ async function finishRun(abortReason) {
 }
 
 async function notifyNewItems(gained) {
-  const [results, seen] = await Promise.all([getResults(), getSeen()]);
+  const [searches, results, seen] = await Promise.all([getSearches(), getResults(), getSeen()]);
   const titles = [];
-  for (const id of Object.keys(results)) {
-    for (const item of computeNewItems(results[id], seen)) {
+  for (const result of listedResults(searches, results)) {
+    for (const item of computeNewItems(result, seen)) {
       if (item.title && titles.length < 3) titles.push('• ' + item.title.slice(0, 60));
     }
   }
@@ -677,10 +744,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
 
       case 'VC_ACK_ALL': {
-        const results = await getResults();
+        // Listed results only. A disabled search's items were not on screen, and
+        // acknowledging them here would clear finds nobody was shown.
+        const [searches, results] = await Promise.all([getSearches(), getResults()]);
         const asins = [];
-        for (const id of Object.keys(results)) {
-          for (const item of results[id].items || []) asins.push(item.asin);
+        for (const result of listedResults(searches, results)) {
+          for (const item of result.items || []) asins.push(item.asin);
         }
         await markSeen(asins);
         await refreshBadge();
@@ -696,12 +765,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await startFetchMore(msg.searchId));
         break;
 
-      case 'VC_SELFTEST': {
-        const res = await collect(msg.url);
-        await releaseCollectorTab();
-        sendResponse(res);
+      case 'VC_SELFTEST':
+        sendResponse(await runSelfTest(msg.url));
         break;
-      }
 
       case 'VC_SETTINGS_CHANGED':
         await syncAutoAlarm();
